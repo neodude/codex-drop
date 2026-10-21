@@ -60,9 +60,10 @@ def main():
         (resources / 'receiver').mkdir()
         for name in ('mac_receiver.py', 'lan_receiver.py'):
             shutil.copy2(ROOT / 'receiver' / name, resources / 'receiver' / name)
+        shutil.copy2(ROOT / 'iphone/Share/Assets.xcassets/DropMark.imageset/DropMark.png', resources / 'DropMark.png')
         cache = staging / 'swift-cache'
         shared = ['/usr/bin/xcrun', 'swiftc', '-parse-as-library', '-module-cache-path', cache]
-        run([*shared, ROOT / 'macos/ReceiverController.swift', ROOT / 'macos/AppPresentation.swift', ROOT / 'macos/CodexDropApp.swift', '-o', executables / 'CodexDrop'])
+        run([*shared, ROOT / 'macos/ReceiverController.swift', ROOT / 'macos/AppPresentation.swift', ROOT / 'macos/StatusWindowView.swift', ROOT / 'macos/CodexDropApp.swift', '-o', executables / 'CodexDrop'])
         run([*shared, ROOT / 'receiver/DeliveryCore.swift', ROOT / 'receiver/MacPlatform.swift', ROOT / 'receiver/ReceiverMain.swift', '-o', resources / 'MacAttachmentReceiver'])
         run([*shared, ROOT / 'receiver/PairingWindow.swift', '-o', resources / 'ReceiverPairing'])
         iconset = staging / 'CodexDrop.iconset'; iconset.mkdir()
@@ -76,10 +77,10 @@ def main():
         info['CodexDropPythonExecutable'] = str(Path(sys.executable).resolve())
         info['CodexDropIconSHA256'] = hashlib.sha256(icon.read_bytes()).hexdigest()
         (contents / 'Info.plist').write_bytes(plistlib.dumps(info))
-        inputs = ['macos/ReceiverController.swift', 'macos/AppPresentation.swift', 'macos/CodexDropApp.swift', 'macos/Info.plist',
+        inputs = ['macos/ReceiverController.swift', 'macos/AppPresentation.swift', 'macos/CodexDropApp.swift', 'macos/StatusWindowView.swift', 'macos/Info.plist',
                   'receiver/DeliveryCore.swift', 'receiver/MacPlatform.swift', 'receiver/ReceiverMain.swift',
                   'receiver/PairingWindow.swift', 'receiver/mac_receiver.py', 'receiver/lan_receiver.py',
-                  'assets/CodexDrop-icon.png', 'scripts/build-mac-app.py']
+                  'assets/CodexDrop-icon.png', 'iphone/Share/Assets.xcassets/DropMark.imageset/DropMark.png', 'scripts/build-mac-app.py']
         manifest = {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest() for name in inputs}
         (resources / 'BuildManifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
         for executable in (resources / 'MacAttachmentReceiver', resources / 'ReceiverPairing', executables / 'CodexDrop'):

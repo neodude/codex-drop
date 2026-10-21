@@ -2,7 +2,7 @@ import UIKit
 
 /// The extension and the offline preview host render the same native view.
 @MainActor final class ShareStatusView: UIView {
-    static let surface = UIColor(white: 0.095, alpha: 1)
+    static let surface = DropBrand.transferBackground
     private let headline = UILabel()
     private let status = UILabel()
     private let detail = UILabel()
@@ -21,8 +21,9 @@ import UIKit
         name.text = "Codex Drop"
         name.font = .preferredFont(forTextStyle: .body)
         name.adjustsFontForContentSizeCategory = true
-        name.textColor = .white
+        name.textColor = DropBrand.ink
         name.accessibilityTraits = .header
+        name.accessibilityIdentifier = "share.brand"
         name.translatesAutoresizingMaskIntoConstraints = false
         addSubview(name)
 
@@ -36,18 +37,21 @@ import UIKit
         headline.numberOfLines = 0
         headline.font = UIFontMetrics(forTextStyle: .largeTitle).scaledFont(for: .systemFont(ofSize: 32, weight: .semibold))
         headline.adjustsFontForContentSizeCategory = true
-        headline.textColor = .white
+        headline.textColor = DropBrand.ink
         headline.accessibilityTraits = .header
+        headline.accessibilityIdentifier = "share.title"
+        status.accessibilityIdentifier = "share.status"
+        detail.accessibilityIdentifier = "share.detail"
         for label in [status, detail] {
             label.textAlignment = .center
             label.numberOfLines = 0
             label.adjustsFontForContentSizeCategory = true
         }
         status.font = .preferredFont(forTextStyle: .body)
-        status.textColor = .white
+        status.textColor = DropBrand.ink
         detail.font = .preferredFont(forTextStyle: .subheadline)
-        detail.textColor = UIColor(white: 0.72, alpha: 1)
-        spinner.color = .systemBlue
+        detail.textColor = DropBrand.secondary
+        spinner.color = DropBrand.lavender
         spinner.hidesWhenStopped = true
         spinner.setContentHuggingPriority(.required, for: .horizontal)
         let statusRow = UIStackView(arrangedSubviews: [spinner, status])
@@ -59,6 +63,7 @@ import UIKit
         stages.alignment = .center
         stages.spacing = 12
         stages.isAccessibilityElement = true
+        stages.accessibilityIdentifier = "share.stages"
         for index in 0..<3 {
             if index > 0 {
                 let connector = UIView()
@@ -90,7 +95,7 @@ import UIKit
 
         var button = UIButton.Configuration.filled()
         button.baseBackgroundColor = UIColor(white: 0.20, alpha: 1)
-        button.baseForegroundColor = .white
+        button.baseForegroundColor = DropBrand.ink
         button.cornerStyle = .large
         button.background.cornerRadius = 16
         button.cornerStyle = .fixed
@@ -139,10 +144,10 @@ import UIKit
         for (index, dot) in dots.enumerated() {
             let complete = index < (stage ?? 0)
             dot.image = UIImage(systemName: complete ? "checkmark.circle.fill" : "circle.fill")
-            dot.tintColor = complete ? .systemMint : index == stage ? .systemBlue : UIColor(white: 0.4, alpha: 1)
+            dot.tintColor = complete ? DropBrand.mint : index == stage ? DropBrand.lavender : UIColor(white: 0.4, alpha: 1)
         }
         if let stage {
-            stages.accessibilityLabel = ["Find Mac", "Upload", "Attach"].enumerated().map { index, label in
+            stages.accessibilityLabel = ["Find your Mac", "Transfer images", "Attach to draft"].enumerated().map { index, label in
                 "\(label): \(index < stage ? "complete" : index == stage ? "in progress" : "waiting")"
             }.joined(separator: ". ")
         }

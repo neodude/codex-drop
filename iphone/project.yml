@@ -9,7 +9,7 @@ settings:
     TARGETED_DEVICE_FAMILY: '1'
     CODE_SIGN_STYLE: Automatic
     DEVELOPMENT_TEAM: YOUR_TEAM_ID
-    CURRENT_PROJECT_VERSION: '7'
+    CURRENT_PROJECT_VERSION: '8'
     MARKETING_VERSION: '1.0'
 targets:
   CodexShot:
@@ -47,12 +47,28 @@ targets:
     platform: iOS
     sources:
       - path: Preview
+      - path: Shared/DropBrand.swift
       - path: Share/ShareStatusView.swift
       - path: Share/Assets.xcassets
-      - path: App/Assets.xcassets
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: guide.guidelabs.CodexDrop.SharePreview
+        ASSETCATALOG_COMPILER_APPICON_NAME: ""
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        CODE_SIGNING_ALLOWED: NO
+  CodexAppPreview:
+    type: application
+    platform: iOS
+    sources:
+      - path: AppPreview
+      - path: App/PairingContentView.swift
+      - path: App/Assets.xcassets
+      - path: Shared/DropBrand.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: guide.guidelabs.CodexDrop.AppPreview
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
@@ -66,3 +82,7 @@ schemes:
     build:
       targets:
         CodexSharePreview: all
+  CodexAppPreview:
+    build:
+      targets:
+        CodexAppPreview: all

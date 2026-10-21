@@ -6,12 +6,13 @@ import Carbon
 @MainActor final class CodexDropDelegate: NSObject, NSApplicationDelegate {
     private var controller: ReceiverController?
     private var window: NSWindow!
-    private let accessibility = NSTextField(labelWithString: "Accessibility: checking…")
-    private let status = NSTextField(wrappingLabelWithString: "Starting…")
-    private let start = NSButton(title: "Start Receiver", target: nil, action: #selector(startReceiver))
-    private let stop = NSButton(title: "Stop Receiver", target: nil, action: #selector(stopReceiver))
-    private let pair = NSButton(title: "Pair Phone…", target: nil, action: #selector(pairPhone))
-    private let login = NSButton(checkboxWithTitle: "Open at Login", target: nil, action: #selector(toggleLogin))
+    private var statusView: StatusWindowView!
+    private var accessibility: NSTextField { statusView.accessibility }
+    private var status: NSTextField { statusView.status }
+    private var start: NSButton { statusView.start }
+    private var stop: NSButton { statusView.stop }
+    private var pair: NSButton { statusView.pair }
+    private var login: NSButton { statusView.login }
     private var lastLoginRefresh = Date.distantPast
     private var timer: Timer?
     private var pairingProcess: Process?
@@ -63,51 +64,17 @@ import Carbon
         if AppPresentation.shouldShowWindow(loginLaunch: loginLaunch, arguments: ProcessInfo.processInfo.arguments) { showWindow() }
     }
     private func buildWindow() {
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 410, height: 455),
-            styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 440, height: 550),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         window.title = "Codex Drop"; window.isReleasedWhenClosed = false
+        window.contentMinSize = NSSize(width: 410, height: 350)
+        statusView = StatusWindowView(target: self, actions: .init(
+            start: #selector(startReceiver), stop: #selector(stopReceiver), pair: #selector(pairPhone),
+            accessibility: #selector(accessibilitySettings), project: #selector(revealProject), log: #selector(revealLog),
+            login: #selector(toggleLogin), loginSettings: #selector(loginItemSettings),
+            close: #selector(closeWindow), quit: #selector(quit)))
+        window.contentView = statusView
         window.center()
-        let icon = NSImageView(image: NSApp.applicationIconImage)
-        icon.imageScaling = .scaleProportionallyUpOrDown
-        icon.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([icon.widthAnchor.constraint(equalToConstant: 52), icon.heightAnchor.constraint(equalToConstant: 52)])
-        let title = NSTextField(labelWithString: "Codex Drop"); title.font = .systemFont(ofSize: 21, weight: .semibold)
-        let subtitle = NSTextField(labelWithString: "Phone screenshots → Codex draft")
-        subtitle.font = .systemFont(ofSize: 12); subtitle.textColor = .secondaryLabelColor
-        let heading = NSStackView(views: [title, subtitle]); heading.orientation = .vertical; heading.alignment = .leading; heading.spacing = 3
-        let header = NSStackView(views: [icon, heading]); header.spacing = 12
-        status.font = .systemFont(ofSize: 13, weight: .semibold)
-        accessibility.font = .systemFont(ofSize: 12); accessibility.textColor = .secondaryLabelColor
-        let note = NSTextField(wrappingLabelWithString: "Same Wi-Fi. Sharing brings Codex forward and attaches to its last active thread. No need to click its message box. Nothing is sent.")
-        note.font = .systemFont(ofSize: 12); note.textColor = .secondaryLabelColor
-        let settings = NSButton(title: "Accessibility Settings…", target: self, action: #selector(accessibilitySettings))
-        let project = NSButton(title: "Reveal Project", target: self, action: #selector(revealProject))
-        let log = NSButton(title: "Reveal Receiver Log", target: self, action: #selector(revealLog))
-        let close = NSButton(title: "Close Window", target: self, action: #selector(closeWindow))
-        let quit = NSButton(title: "Quit Codex Drop…", target: self, action: #selector(quit))
-        for button in [start, stop, pair, settings, project, log, close, quit] { button.target = self; button.bezelStyle = .rounded }
-        login.target = self
-        let loginSettings = NSButton(title: "Login Items Settings…", target: self, action: #selector(loginItemSettings))
-        loginSettings.bezelStyle = .rounded
-        func row(_ buttons: [NSButton]) -> NSStackView {
-            let row = NSStackView(views: buttons); row.distribution = .fillEqually; row.spacing = 8
-            return row
-        }
-        let first = row([start, stop]), second = row([pair, settings]), third = row([project, log])
-        let startup = NSStackView(views: [login, loginSettings]); startup.spacing = 12
-        let background = NSTextField(wrappingLabelWithString: "Closing this window keeps the receiver running. Reopen Codex Drop from Finder or Spotlight. Quit stops the receiver.")
-        background.font = .systemFont(ofSize: 11); background.textColor = .secondaryLabelColor
-        let actions = row([close, quit])
-        let stack = NSStackView(views: [header, status, accessibility, note, first, second, third, startup, background, actions])
-        stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 12
-        stack.setCustomSpacing(18, after: header)
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        window.contentView!.addSubview(stack)
-        NSLayoutConstraint.activate([stack.leadingAnchor.constraint(equalTo: window.contentView!.leadingAnchor, constant: 24),
-            stack.trailingAnchor.constraint(equalTo: window.contentView!.trailingAnchor, constant: -24),
-            stack.topAnchor.constraint(equalTo: window.contentView!.topAnchor, constant: 24),
-            stack.bottomAnchor.constraint(lessThanOrEqualTo: window.contentView!.bottomAnchor, constant: -20)])
-        for view in [status, note, first, second, third, background, actions] { view.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true }
     }
     @objc private func closeWindow() { window.close() }
     @objc private func showWindow() { window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true) }
