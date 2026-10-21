@@ -1,0 +1,2 @@
+# Keep the generated Windows wrapper native on disk and normalized in Git.
+android/gradlew.bat text eol=crlf

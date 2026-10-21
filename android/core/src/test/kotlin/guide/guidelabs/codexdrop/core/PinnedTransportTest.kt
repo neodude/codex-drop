@@ -66,4 +66,16 @@ class PinnedTransportTest {
             }
         }
     }
+    @Test fun serviceUnavailableNeverReplaysACommitBody() = runBlocking {
+        val cert = HeldCertificate.Builder().commonName("Fixture Mac").build()
+        MockWebServer().use { server ->
+            server.useHttps(HandshakeCertificates.Builder().heldCertificate(cert).build().sslSocketFactory(), false)
+            server.enqueue(MockResponse().setResponseCode(503).addHeader("Retry-After", "0"))
+            server.enqueue(MockResponse().setBody("unexpected replay"));server.start()
+            PinnedHttpsTransport(pairing(cert), Endpoint(listOf(InetAddress.getLoopbackAddress()), server.port)).use { client ->
+                assertEquals(503, client.execute(HttpRequest("v1/batches/$TEST_ID/commit", "{}".toByteArray())).statusCode)
+                assertEquals(1, server.requestCount)
+            }
+        }
+    }
 }

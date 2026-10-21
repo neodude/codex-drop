@@ -5,6 +5,7 @@ import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import okio.Buffer
+import okio.BufferedSink
 import java.io.Closeable
 import java.io.IOException
 import java.net.InetAddress
@@ -59,7 +60,16 @@ class PinnedHttpsTransport(pairing: Pairing, endpoint: Endpoint) : Transport, Cl
         require(request.path.matches(Regex("v1/(batches|jobs)(/[0-9a-f-]{36})?(/(images/[0-9]|commit))?")))
         val builder = Request.Builder().url(base.newBuilder().encodedPath("/" + request.path).build())
             .header("Authorization", "Bearer $token").header("Cache-Control", "no-store")
-        request.body?.let { builder.post(it.toRequestBody(request.contentType.toMediaType())) }
+        request.body?.let {
+            val bytes = it.toRequestBody(request.contentType.toMediaType())
+            // Also prevent HTTP follow-ups (e.g. 503 Retry-After: 0), not just connection retries.
+            builder.post(object : RequestBody() {
+                override fun contentType() = bytes.contentType()
+                override fun contentLength() = bytes.contentLength()
+                override fun isOneShot() = true
+                override fun writeTo(sink: BufferedSink) = bytes.writeTo(sink)
+            })
+        }
         request.requestId?.let { builder.header("X-Request-ID", it) }
         val call = client.newCall(builder.build())
         return suspendCancellableCoroutine { continuation ->

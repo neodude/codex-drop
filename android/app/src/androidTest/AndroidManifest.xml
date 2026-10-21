@@ -1,0 +1,3 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application><provider android:name="guide.guidelabs.codexdrop.ImageFixtureProvider" android:authorities="guide.guidelabs.codexdrop.test.images" android:exported="true" /></application>
+</manifest>

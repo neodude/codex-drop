@@ -1,0 +1,1 @@
+<inset xmlns:android="http://schemas.android.com/apk/res/android" android:inset="22%"><bitmap android:src="@drawable/drop_mark" android:gravity="fill"/></inset>

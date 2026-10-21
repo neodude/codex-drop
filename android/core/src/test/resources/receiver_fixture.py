@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Isolated real receiver; fake delivery only. Never UI, clipboard or live data."""
 import json
+import os
 import secrets
 import sys
 import tempfile
@@ -21,7 +22,11 @@ with tempfile.TemporaryDirectory(prefix='codexdrop-android-protocol-') as tempor
     server = make_tls_server(queue, token, queue.directory, 0, '127.0.0.1')
     stop = threading.Event()
     def deliver():
-        worker = DeliveryWorker(queue, lambda job: BatchTests.aggregate(len(job['images'])))
+        def aggregate(job):
+            # Optional visual-capture delay, fixture only; never native delivery.
+            time.sleep(min(3, max(0, float(os.environ.get('CODEX_DROP_FIXTURE_DELAY', '0')))))
+            return BatchTests.aggregate(len(job['images']))
+        worker = DeliveryWorker(queue, aggregate)
         while not stop.is_set():
             worker.once()
             stop.wait(.01)
