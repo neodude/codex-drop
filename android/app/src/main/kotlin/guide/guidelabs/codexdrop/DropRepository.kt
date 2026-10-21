@@ -62,7 +62,10 @@ class DropRepository(private val context: Context, private val discovery: Receiv
                 client.checkConnection()
                 return object : DropConnection { override val client = client; override fun close() = transport.close() }
             } catch (cancelled: CancellationException) { transport.close(); throw cancelled }
-            catch (_: Exception) { transport.close() }
+            catch (error: Exception) {
+                android.util.Log.w("CodexDrop", "Connection probe failed: " + error.javaClass.name + " / " + (error.cause?.javaClass?.name ?: "none"))
+                transport.close()
+            }
         }
         throw DropFailure("Couldn’t securely connect to your paired Mac. Check the receiver, Wi-Fi and pairing.")
     }

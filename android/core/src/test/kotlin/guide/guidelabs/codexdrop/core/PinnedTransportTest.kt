@@ -78,4 +78,10 @@ class PinnedTransportTest {
             }
         }
     }
+    @Test fun closedTransportCannotSubmitAgain() {
+        val cert = HeldCertificate.Builder().commonName("Fixture Mac").build()
+        val transport = PinnedHttpsTransport(pairing(cert),Endpoint(listOf(InetAddress.getLoopbackAddress()),9))
+        transport.close();transport.close()
+        assertThrows(IOException::class.java) { runBlocking { transport.execute(HttpRequest("v1/batches", "{}".toByteArray(), requestId = TEST_ID)) } }
+    }
 }

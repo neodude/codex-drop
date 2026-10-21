@@ -85,7 +85,7 @@ class FlowTest {
     }
     private fun screenshot(name: String) {
         val bitmap = instrumentation.uiAutomation.takeScreenshot() ?: error("Missing screenshot")
-        try { File(context.getExternalFilesDir(null),name).outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG,100,it) } }
+        try { File(context.filesDir,name).outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG,100,it) } }
         finally { bitmap.recycle() }
     }
 }

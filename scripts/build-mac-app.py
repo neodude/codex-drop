@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Build/sign the local Codex Drop app; never starts it or the receiver."""
+import argparse
 import datetime
 import hashlib
 import json
@@ -37,6 +38,14 @@ def verify_team(path):
     run(['/usr/bin/codesign', '--verify', '--strict', path])
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--runtime-root',type=Path,default=ROOT,help='Existing project whose private receiver data this build uses')
+    parser.add_argument('--output',type=Path,default=ROOT/'Codex Drop.app',help='Destination .app bundle (prior bundle is archived)')
+    args = parser.parse_args()
+    runtime_root = args.runtime_root.resolve()
+    destination = args.output.resolve()
+    if not (runtime_root/'receiver/mac_receiver.py').is_file() or destination.suffix != '.app' or not destination.parent.is_dir():
+        raise RuntimeError('Invalid runtime project or app destination')
     icon = ROOT / 'assets/CodexDrop-icon.png'
     if not icon.is_file():
         raise RuntimeError('Missing assets/CodexDrop-icon.png')
@@ -63,7 +72,7 @@ def main():
                 run(['/usr/bin/sips', '-z', size * scale, size * scale, icon, '--out', iconset / filename], stdout=subprocess.DEVNULL)
         run(['/usr/bin/iconutil', '-c', 'icns', iconset, '-o', resources / 'CodexDrop.icns'])
         info = plistlib.loads((ROOT / 'macos/Info.plist').read_bytes())
-        info['CodexDropProjectRoot'] = str(ROOT)
+        info['CodexDropProjectRoot'] = str(runtime_root)
         info['CodexDropPythonExecutable'] = str(Path(sys.executable).resolve())
         info['CodexDropIconSHA256'] = hashlib.sha256(icon.read_bytes()).hexdigest()
         (contents / 'Info.plist').write_bytes(plistlib.dumps(info))
@@ -79,7 +88,6 @@ def main():
         run(['/usr/bin/codesign', '--force', '--sign', identity, '--timestamp=none', app])
         run(['/usr/bin/codesign', '--verify', '--deep', '--strict', '--verbose=2', app])
         verify_team(app)
-        destination = ROOT / app.name
         # Preserve prior bundles and all runtime evidence. Never replace private data.
         if destination.exists():
             archive = ROOT / '.codex-artifacts/builds' / datetime.datetime.now().strftime('%Y%m%d-%H%M%S-%f')

@@ -32,7 +32,7 @@ import Carbon
         check(alert.buttons.map(\.title) == ["Keep Running", "Quit Codex Drop"], "separate cancel and quit choices")
         check(alert.buttons[0].keyEquivalent == "\r" && alert.buttons[1].keyEquivalent.isEmpty, "Return must keep receiver running")
         check(alert.buttons[1].hasDestructiveAction, "quit must be marked destructive")
-        check(alert.informativeText.contains("iPhone") && alert.informativeText.contains("won’t reach Codex"), "explain the consequence")
+        check(alert.informativeText.contains("phone") && alert.informativeText.contains("won’t reach Codex"), "explain the consequence")
         // Exercise both AppKit modal responses using only this fixture's alerts.
         for (index, response) in [NSApplication.ModalResponse.alertFirstButtonReturn, .alertSecondButtonReturn].enumerated() {
             let dialog = AppPresentation.quitAlert()

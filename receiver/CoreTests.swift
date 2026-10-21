@@ -102,6 +102,83 @@ final class FakeAdapter: DeliveryAdapter {
             guard condition else { fputs("FAIL: \(name)\n", stderr); throw TestFailure.expected }
             checks += 1
         }
+        // Reproduce activation readiness without UI or clipboard access. In each
+        // sample the native adapter still reads the original pinned editor/window.
+        var activationTime: TimeInterval = 0
+        var activationSamples = 0
+        try ComposerActivationGuard.waitUntilReady(now: { activationTime }, wait: { activationTime += $0 }) {
+            activationSamples += 1
+            return ComposerActivationObservation(window: activationSamples < 3 ? .unavailable : .same,
+                foregroundReady: true, contentUnchanged: true)
+        }
+        try check(activationSamples == 3 && activationTime > 0, "activation waits for missing AX window without reacquiring destination")
+        activationTime = 0; activationSamples = 0
+        try ComposerActivationGuard.waitUntilReady(now: { activationTime }, wait: { activationTime += $0 }) {
+            activationSamples += 1
+            return ComposerActivationObservation(window: .same,
+                foregroundReady: activationSamples >= 3, contentUnchanged: true)
+        }
+        try check(activationSamples == 3, "activation waits for foreground acknowledgement with the same window")
+        for window in [ActivationWindowIdentity.same, .unavailable, .changed] {
+            activationTime = 0; activationSamples = 0
+            do {
+                try ComposerActivationGuard.waitUntilReady(now: { activationTime }, wait: { activationTime += $0 }) {
+                    activationSamples += 1
+                    return ComposerActivationObservation(window: window, foregroundReady: true,
+                        contentUnchanged: window == .changed, diagnostics: ["draftSame": "false"])
+                }
+                try check(false, "activation must refuse known destination/content changes")
+            } catch let refusal as DeliveryRefusal {
+                try check(refusal.reason == "composer_changed_during_activation" && activationSamples == 1 && activationTime == 0,
+                          "available different window or changed draft/attachments/selection blocks immediately")
+                try check(refusal.diagnostics?["draftSame"] == "false", "activation preserves structural failure diagnostics")
+            }
+        }
+        for changedWindow in [true, false] {
+            activationTime = 0; activationSamples = 0
+            do {
+                try ComposerActivationGuard.waitUntilReady(now: { activationTime }, wait: { activationTime += $0 }) {
+                    activationSamples += 1
+                    return ComposerActivationObservation(window: activationSamples == 1 ? .unavailable : changedWindow ? .changed : .same,
+                        foregroundReady: true, contentUnchanged: activationSamples == 1 || changedWindow)
+                }
+                try check(false, "pending activation cannot conceal later destination/content changes")
+            } catch let refusal as DeliveryRefusal {
+                try check(refusal.reason == "composer_changed_during_activation" && activationSamples == 2,
+                          "pending activation aborts as soon as a real window or content change appears")
+            }
+        }
+        activationTime = 0; activationSamples = 0
+        try ComposerActivationGuard.waitUntilReady(now: { activationTime }, wait: { activationTime += $0 }) {
+            activationSamples += 1
+            return ComposerActivationObservation(window: .same, foregroundReady: true, contentUnchanged: true)
+        }
+        try check(activationTime == 0 && activationSamples == 1, "already-ready activation adds no delay or extra request")
+        for foregroundReady in [true, false] {
+            activationTime = 0; activationSamples = 0
+            do {
+                try ComposerActivationGuard.waitUntilReady(now: { activationTime }, wait: { activationTime += $0 }, timeout: 0.05) {
+                    activationSamples += 1
+                    return ComposerActivationObservation(window: .unavailable, foregroundReady: foregroundReady, contentUnchanged: true)
+                }
+                try check(false, "activation unavailable deadline must refuse")
+            } catch let refusal as DeliveryRefusal {
+                try check(refusal.reason == (foregroundReady ? "composer_window_unavailable_after_activation" : "codex_activation_not_confirmed") && activationTime >= 0.05 && activationTime < 0.071,
+                          "unavailable window/foreground has a bounded pre-paste deadline")
+            }
+        }
+        activationTime = 0; activationSamples = 0
+        do {
+            try ComposerActivationGuard.waitUntilReady(now: { activationTime }, wait: { activationTime += $0 }) {
+                activationSamples += 1
+                if activationSamples == 2 { throw DeliveryRefusal(reason: "foreground_changed_during_activation") }
+                return ComposerActivationObservation(window: .unavailable, foregroundReady: true, contentUnchanged: true)
+            }
+            try check(false, "foreground change during activation must propagate")
+        } catch let refusal as DeliveryRefusal {
+            try check(refusal.reason == "foreground_changed_during_activation" && activationSamples == 2,
+                      "foreground intervention aborts pending activation without another request")
+        }
         for scenario in ["success", "delayed", "target_before", "target_after", "selected_text", "clipboard_before",
                          "clipboard_after", "draft_after", "attachment_lost", "missing_ack", "unread_clipboard", "two_images", "paste_error", "unreadable",
                          "draft_before", "attachment_before", "stage_error", "restore_failed", "transient", "existing_png", "journal_target", "journal_clipboard"] {

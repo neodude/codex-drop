@@ -37,13 +37,15 @@ with (logs / 'fixture-stderr.log').open('w') as errors:
         adb('shell', 'settings', 'put', 'system', 'font_scale', '1.5', capture_output=True)
         # Only ephemeral, disposable fixture credentials; never print the argument.
         with (logs / 'platform-flow-tests.log').open('w') as output:
-            adb('shell', 'am', 'instrument', '-w', '-r', '-e', 'fixture', "'" + config + "'", 'guide.guidelabs.codexdrop.test/androidx.test.runner.AndroidJUnitRunner', stdout=output, stderr=subprocess.STDOUT)
+            adb('shell', 'am', 'instrument', '-w', '-r', '-e', 'class', 'guide.guidelabs.codexdrop.PlatformTest,guide.guidelabs.codexdrop.FlowTest', '-e', 'fixture', "'" + config + "'", 'guide.guidelabs.codexdrop.test/androidx.test.runner.AndroidJUnitRunner', stdout=output, stderr=subprocess.STDOUT)
         result = (logs / 'platform-flow-tests.log').read_text()
         match = re.search(r'OK \((\d+) tests\)', result)
         if not match or int(match[1]) != 6 or 'FAILURES' in result:
             raise RuntimeError('Instrumented checks failed. See platform-flow-tests.log.')
         for name in ['setup.png', 'share-review.png', 'share-progress.png']:
-            adb('pull', '/sdcard/Android/data/guide.guidelabs.codexdrop/files/' + name, str(logs / name), capture_output=True)
+            image = subprocess.run([args.adb, '-s', args.serial, 'exec-out', 'run-as', 'guide.guidelabs.codexdrop', 'cat', 'files/' + name], check=True, capture_output=True).stdout
+            if not image.startswith(bytes.fromhex('89504e470d0a1a0a')): raise AssertionError('Screenshot is not PNG: ' + name)
+            (logs / name).write_bytes(image)
         print('PASS: 6 emulator checks, including 3-image pinned HTTPS round trip. Screenshots saved.')
     finally:
         adb('shell', 'settings', 'put', 'system', 'font_scale', font if font and font != 'null' else '1.0', capture_output=True)

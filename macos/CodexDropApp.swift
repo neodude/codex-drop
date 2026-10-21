@@ -10,7 +10,7 @@ import Carbon
     private let status = NSTextField(wrappingLabelWithString: "Starting…")
     private let start = NSButton(title: "Start Receiver", target: nil, action: #selector(startReceiver))
     private let stop = NSButton(title: "Stop Receiver", target: nil, action: #selector(stopReceiver))
-    private let pair = NSButton(title: "Pair iPhone…", target: nil, action: #selector(pairPhone))
+    private let pair = NSButton(title: "Pair Phone…", target: nil, action: #selector(pairPhone))
     private let login = NSButton(checkboxWithTitle: "Open at Login", target: nil, action: #selector(toggleLogin))
     private var lastLoginRefresh = Date.distantPast
     private var timer: Timer?
@@ -72,7 +72,7 @@ import Carbon
         icon.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([icon.widthAnchor.constraint(equalToConstant: 52), icon.heightAnchor.constraint(equalToConstant: 52)])
         let title = NSTextField(labelWithString: "Codex Drop"); title.font = .systemFont(ofSize: 21, weight: .semibold)
-        let subtitle = NSTextField(labelWithString: "iPhone screenshots → Codex draft")
+        let subtitle = NSTextField(labelWithString: "Phone screenshots → Codex draft")
         subtitle.font = .systemFont(ofSize: 12); subtitle.textColor = .secondaryLabelColor
         let heading = NSStackView(views: [title, subtitle]); heading.orientation = .vertical; heading.alignment = .leading; heading.spacing = 3
         let header = NSStackView(views: [icon, heading]); header.spacing = 12

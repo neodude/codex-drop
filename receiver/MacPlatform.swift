@@ -269,9 +269,12 @@ final class MacDeliveryAdapter: DeliveryAdapter {
         let draft = try captureComposerDraft(candidate, text: text)
         let attachments = try attachmentCounts(scope)
         guard axSelectionEmpty(candidate) else { throw DeliveryRefusal(reason: "selection_not_empty") }
-        func invariants(detailed: Bool = false) -> (unchanged: Bool, details: [String: String]) {
-            let currentWindow = axElement(app, kAXFocusedWindowAttribute) ?? axElement(app, kAXMainWindowAttribute)
+        func invariants(detailed: Bool = false) -> (unchanged: Bool, window: ActivationWindowIdentity, contentUnchanged: Bool, details: [String: String]) {
+            let focusedWindow = axElement(app, kAXFocusedWindowAttribute)
+            let mainWindow = axElement(app, kAXMainWindowAttribute)
+            let currentWindow = focusedWindow ?? mainWindow
             let windowSame = currentWindow.map { CFEqual($0, window) } ?? false
+            let windowIdentity: ActivationWindowIdentity = currentWindow == nil ? .unavailable : windowSame ? .same : .changed
             let titleSame = (axString(window, kAXTitleAttribute) ?? "") == title
             let after = axString(candidate, kAXValueAttribute)
             let projected = after.flatMap { try? captureComposerDraft(candidate, text: $0) }
@@ -281,6 +284,8 @@ final class MacDeliveryAdapter: DeliveryAdapter {
             let selection = axSelectionState(candidate)
             let selectionEmpty = selection.empty
             var details = ["windowObjectSame": String(windowSame), "windowTitleSame": String(titleSame),
+                           "focusedWindowAvailable": String(focusedWindow != nil), "mainWindowAvailable": String(mainWindow != nil),
+                           "windowIdentity": windowIdentity == .same ? "same" : windowIdentity == .unavailable ? "unavailable" : "changed",
                            "draftReadable": String(after != nil), "draftSame": String(draftSame),
                            "draftBeforeBytes": String(draft.count), "rawBeforeBytes": String(text.utf8.count),
                            "draftAfterBytes": projected.map { String($0.count) } ?? "unavailable",
@@ -289,7 +294,8 @@ final class MacDeliveryAdapter: DeliveryAdapter {
                            "selectionEmpty": String(selectionEmpty), "selectionReadable": String(selection.readable),
                            "selectionLength": selection.length.map { String($0) } ?? "unavailable"]
             if detailed, let after { details.merge(draftAXMetadata(candidate, text: after)) { _, new in new } }
-            return (windowSame && titleSame && draftSame && attachmentsSame && selectionEmpty, details)
+            let contentUnchanged = titleSame && draftSame && attachmentsSame && selectionEmpty
+            return (windowSame && contentUnchanged, windowIdentity, contentUnchanged, details)
         }
         if focusDiagnostic {
             var baseline = draftAXMetadata(candidate, text: text)
@@ -305,29 +311,41 @@ final class MacDeliveryAdapter: DeliveryAdapter {
         guard sameWindow(), sameFocus else { throw DeliveryRefusal(reason: "target_changed_during_discovery") }
         if needsActiveResponder {
             let pid = applicationPID(app)
-            if NSWorkspace.shared.frontmostApplication?.processIdentifier != pid {
-                let previous = NSWorkspace.shared.frontmostApplication?.processIdentifier
+            let previous = NSWorkspace.shared.frontmostApplication?.processIdentifier
+            if previous != pid {
                 guard let target = NSRunningApplication(processIdentifier: pid), target.bundleIdentifier == expectedBundleID,
                       target.activate(options: [.activateIgnoringOtherApps]) else {
                     throw DeliveryRefusal(reason: "codex_activation_failed")
                 }
-                let activationDeadline = now + 1
-                while NSWorkspace.shared.frontmostApplication?.processIdentifier != pid {
-                    guard !cancelled, sameWindow() else { throw DeliveryRefusal(reason: "target_changed_during_activation") }
-                    let active = NSWorkspace.shared.frontmostApplication?.processIdentifier
-                    guard active == nil || active == previous else { throw DeliveryRefusal(reason: "foreground_changed_during_activation") }
-                    guard now < activationDeadline else { throw DeliveryRefusal(reason: "codex_activation_not_confirmed") }
-                    wait(0.02)
+            }
+            // Workspace activation acknowledgement can precede AX window readiness.
+            // Wait only for missing window values; the original window/editor stay
+            // pinned and a different window or any content change refuses at once.
+            try ComposerActivationGuard.waitUntilReady(now: { self.now }, wait: { self.wait($0) }) {
+                guard !self.cancelled else { throw DeliveryRefusal(reason: "interrupted") }
+                let active = NSWorkspace.shared.frontmostApplication?.processIdentifier
+                guard active == pid || active == nil || active == previous else {
+                    throw DeliveryRefusal(reason: "foreground_changed_during_activation")
                 }
+                let state = invariants()
+                if self.focusDiagnostic {
+                    var sample = state.details
+                    sample["phase"] = "activationReadiness"
+                    sample["codexFrontmost"] = String(active == pid)
+                    self.focusSamples.append(sample)
+                }
+                return ComposerActivationObservation(window: state.window, foregroundReady: active == pid,
+                    contentUnchanged: state.contentUnchanged, diagnostics: state.details)
             }
-        }
-        let activatedState = invariants(detailed: focusDiagnostic && !diagnosticActivates)
-        guard activatedState.unchanged else {
-            var details = activatedState.details
-            if let current = axString(candidate, kAXValueAttribute) {
-                for (key, value) in draftAXMetadata(candidate, text: current) { details["afterDecision_" + key] = value }
+        } else {
+            let activatedState = invariants(detailed: focusDiagnostic && !diagnosticActivates)
+            guard activatedState.unchanged else {
+                var details = activatedState.details
+                if let current = axString(candidate, kAXValueAttribute) {
+                    for (key, value) in draftAXMetadata(candidate, text: current) { details["afterDecision_" + key] = value }
+                }
+                throw DeliveryRefusal(reason: "composer_changed_during_activation", diagnostics: details)
             }
-            throw DeliveryRefusal(reason: "composer_changed_during_activation", diagnostics: details)
         }
         let focusBeforeRequest = axElement(app, kAXFocusedUIElementAttribute)
         if !composerHasFocus(candidate, app: app) {

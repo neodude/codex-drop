@@ -54,6 +54,8 @@ class ShareViewModel(private val gateway: DropGateway, restoredId: String? = nul
                 }
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) {
+                // Structural diagnostics only: never exception messages, image URIs or pairing data.
+                android.util.Log.e("CodexDrop", error.javaClass.name + ": " + error.stackTrace.take(8).joinToString { it.className + "." + it.methodName + ":" + it.lineNumber })
                 val uncertain = mutableState.value.committed || (error is DropFailure && error.mayBeAttached)
                 mutableState.value = ShareUiState(if (uncertain) "Check your Mac" else "Couldn’t attach",
                     if (error is DropFailure) error.message.orEmpty() else "The transfer stopped. Check the Mac and Wi-Fi before sharing again.",

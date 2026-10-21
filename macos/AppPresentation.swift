@@ -15,7 +15,7 @@ import Carbon
     static func quitAlert() -> NSAlert {
         let alert = NSAlert()
         alert.messageText = "Quit Codex Drop?"
-        alert.informativeText = "Screenshots shared from your iPhone won’t reach Codex while Codex Drop is quit. Open Codex Drop again to resume receiving."
+        alert.informativeText = "Screenshots shared from your phone won’t reach Codex while Codex Drop is quit. Open Codex Drop again to resume receiving."
         alert.addButton(withTitle: "Keep Running").keyEquivalent = "\r"
         let quit = alert.addButton(withTitle: "Quit Codex Drop")
         quit.hasDestructiveAction = true

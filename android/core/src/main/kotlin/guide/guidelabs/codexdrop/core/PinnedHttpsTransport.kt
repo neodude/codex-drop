@@ -16,6 +16,7 @@ import java.security.SecureRandom
 import java.security.cert.CertificateException
 import java.security.cert.X509Certificate
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import javax.net.ssl.*
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
@@ -30,6 +31,7 @@ class PinnedHttpsTransport(pairing: Pairing, endpoint: Endpoint) : Transport, Cl
     private val base = HttpUrl.Builder().scheme("https").host(host).port(endpoint.port).build()
     private val token = pairing.token
     private val client: OkHttpClient
+    private val closed = AtomicBoolean(false)
     init {
         val expected = pairing.pin.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
         fun matches(certificate: X509Certificate): Boolean = MessageDigest.isEqual(expected, MessageDigest.getInstance("SHA-256").digest(certificate.encoded))
@@ -57,6 +59,7 @@ class PinnedHttpsTransport(pairing: Pairing, endpoint: Endpoint) : Transport, Cl
             .callTimeout(25, TimeUnit.SECONDS).build()
     }
     override suspend fun execute(request: HttpRequest): HttpReply {
+        if (closed.get()) throw IOException("Receiver connection is closed")
         require(request.path.matches(Regex("v1/(batches|jobs)(/[0-9a-f-]{36})?(/(images/[0-9]|commit))?")))
         val builder = Request.Builder().url(base.newBuilder().encodedPath("/" + request.path).build())
             .header("Authorization", "Bearer $token").header("Cache-Control", "no-store")
@@ -93,5 +96,14 @@ class PinnedHttpsTransport(pairing: Pairing, endpoint: Endpoint) : Transport, Cl
             })
         }
     }
-    override fun close() { client.dispatcher.cancelAll(); client.connectionPool.evictAll(); client.dispatcher.executorService.shutdown() }
+    override fun close() {
+        if (!closed.compareAndSet(false, true)) return
+        // SSLSocket.close may write close_notify. Never run it on the caller's UI thread.
+        val executor = client.dispatcher.executorService
+        executor.execute {
+            client.dispatcher.cancelAll()
+            client.connectionPool.evictAll()
+        }
+        executor.shutdown()
+    }
 }

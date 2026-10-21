@@ -15,12 +15,12 @@ import CoreImage.CIFilterBuiltins
         let app = NSApplication.shared; app.setActivationPolicy(.regular)
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 500, height: 590),
             styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
-        window.title = "Pair iPhone with Codex Drop"; window.isReleasedWhenClosed = false
+        window.title = "Pair Phone with Codex Drop"; window.isReleasedWhenClosed = false
         let image = NSImageView(); image.image = NSImage(cgImage: cg, size: NSSize(width: 430, height: 430))
         image.imageScaling = .scaleProportionallyUpOrDown
-        let title = NSTextField(labelWithString: "Scan with Codex Drop on your iPhone")
+        let title = NSTextField(labelWithString: "Scan with Codex Drop on your phone")
         title.font = .systemFont(ofSize: 19, weight: .semibold)
-        let note = NSTextField(wrappingLabelWithString: "This QR pairs your phone with this Mac. Keep it private.\nAfter pairing, close this window and focus the intended Codex composer. Leave Codex Drop running; its main window can be closed.")
+        let note = NSTextField(wrappingLabelWithString: "This QR pairs your phone with this Mac. Keep it private.\nAfter pairing, select the Codex thread you want to receive images. You can then use another app. Leave Codex Drop running; its main window can be closed.")
         note.alignment = .center
         let stack = NSStackView(views: [title, image, note]); stack.orientation = .vertical; stack.spacing = 16
         stack.translatesAutoresizingMaskIntoConstraints = false
