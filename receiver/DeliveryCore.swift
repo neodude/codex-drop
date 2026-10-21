@@ -1,4 +1,5 @@
 import Foundation
+import CoreFoundation
 
 // Only the empty-document decoration from Codex's editor may be excluded.
 // Typed text, including words identical to a hint, retains its exact bytes.
@@ -41,6 +42,17 @@ enum ComposerDraft {
         guard visited.count == nodes.count,
               raw == hint || raw == hint + "\n" || raw == "\n" else { return original }
         return Data()
+    }
+}
+
+// Best-effort OS metadata for a more specific refusal only. Unknown metadata
+// provides no evidence of an unlocked session; all composer guards still apply.
+enum MacSessionLockState {
+    case locked, unlocked, unknown
+
+    static func parse(_ value: Any?) -> MacSessionLockState {
+        guard let boolean = value as? NSNumber, CFGetTypeID(boolean) == CFBooleanGetTypeID() else { return .unknown }
+        return boolean.boolValue ? .locked : .unlocked
     }
 }
 

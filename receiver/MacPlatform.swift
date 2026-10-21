@@ -422,6 +422,15 @@ final class MacDeliveryAdapter: DeliveryAdapter {
 
     func observe() throws -> ComposerSnapshot {
         guard !cancelled else { throw DeliveryRefusal(reason: "interrupted") }
+        // This best-effort WindowServer flag improves refusal specificity. It is
+        // never an authorization gate: false/missing/unknown retain every AX,
+        // destination, draft, selection and attachment guard below. Check each
+        // observation so locking during delivery also stops the existing flow.
+        if fixturePasteboard == nil,
+           let session = CGSessionCopyCurrentDictionary() as? [String: Any],
+           MacSessionLockState.parse(session["CGSSessionScreenIsLocked"]) == .locked {
+            throw DeliveryRefusal(reason: "mac_screen_locked")
+        }
         let applications = NSRunningApplication.runningApplications(withBundleIdentifier: expectedBundleID)
         guard applications.count == 1 else { throw DeliveryRefusal(reason: fixturePasteboard == nil ? "codex_app_not_unique" : "fixture_app_not_unique") }
         let running = applications[0]

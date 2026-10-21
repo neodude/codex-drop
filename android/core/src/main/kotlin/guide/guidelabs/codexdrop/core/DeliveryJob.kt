@@ -21,7 +21,9 @@ data class DeliveryJob(val id: String, val state: String, val items: List<Delive
         }
         val permission = if (reason == "accessibility_permission_required" || items?.any { it.reason == "accessibility_permission_required" } == true)
             "\nAllow Codex Drop in Mac System Settings → Privacy & Security → Accessibility." else ""
-        return "$detail$permission\nDon’t resend images already attached. No automatic retry."
+        val unlock = if (reason == "mac_screen_locked" || items?.any { it.reason == "mac_screen_locked" } == true)
+            "Unlock your Mac to attach screenshots.\n" else ""
+        return "$unlock$detail$permission\nDon’t resend images already attached. No automatic retry."
     }
     companion object {
         internal fun parse(fields: Map<String, Any?>): DeliveryJob {

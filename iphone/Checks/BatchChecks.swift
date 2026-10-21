@@ -119,6 +119,15 @@ import UniformTypeIdentifiers
         let permission = try JSONDecoder().decode(DeliveryJob.self, from: Data("{\"id\":\"x\",\"state\":\"blocked\",\"result\":{\"reason\":\"accessibility_permission_required\",\"verifiedCount\":0,\"totalCount\":2,\"items\":[{\"index\":0,\"status\":\"blocked\",\"pasteAttempted\":false},{\"index\":1,\"status\":\"not_attempted\"}]}}".utf8))
         precondition(permission.userMessage.contains("0 of 2")); precondition(permission.userMessage.contains("System Settings")); precondition(permission.userMessage.contains("Accessibility")); precondition(permission.userMessage.contains("not tried"))
         checks += 1
+        let locked = try JSONDecoder().decode(DeliveryJob.self, from: Data(#"{"id":"x","state":"blocked","result":{"reason":"mac_screen_locked","verifiedCount":0,"totalCount":1,"items":[{"index":0,"status":"blocked","pasteAttempted":false}]}}"#.utf8))
+        precondition(locked.userMessage.hasPrefix("Unlock your Mac")); precondition(locked.userMessage.contains("0 of 1")); precondition(locked.userMessage.contains("No automatic retry")); precondition(!locked.allVerified(count: 1))
+        checks += 1
+        let partialLocked = try JSONDecoder().decode(DeliveryJob.self, from: Data(#"{"id":"x","state":"uncertain","result":{"reason":"batch_stopped","verifiedCount":1,"totalCount":2,"items":[{"index":0,"status":"verified"},{"index":1,"status":"blocked","pasteAttempted":false,"reason":"mac_screen_locked"}]}}"#.utf8))
+        precondition(partialLocked.userMessage.hasPrefix("Unlock your Mac")); precondition(partialLocked.userMessage.contains("1 of 2")); precondition(partialLocked.userMessage.contains("Do not resend"))
+        checks += 1
+        let missingLocked = try JSONDecoder().decode(DeliveryJob.self, from: Data(#"{"id":"x","state":"blocked","result":{"reason":"mac_screen_locked"}}"#.utf8))
+        precondition(missingLocked.userMessage.hasPrefix("Unlock your Mac")); precondition(missingLocked.userMessage.contains("may already be attached")); precondition(!missingLocked.allVerified(count: 1))
+        checks += 1
         let missing = try JSONDecoder().decode(DeliveryJob.self, from: Data("{\"id\":\"x\",\"state\":\"verified\"}".utf8))
         precondition(!missing.allVerified(count: 2)); precondition(missing.userMessage.contains("review"))
         checks += 1

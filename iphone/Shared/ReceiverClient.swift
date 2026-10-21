@@ -29,15 +29,18 @@ struct DeliveryJob: Decodable, Sendable {
     }
     var userMessage: String {
         let permissionNeeded = result?.reason == "accessibility_permission_required" || result?.items?.contains { $0.reason == "accessibility_permission_required" } == true
+        let unlockNeeded = result?.reason == "mac_screen_locked" || result?.items?.contains { $0.reason == "mac_screen_locked" } == true
+        let unlockHelp = "Unlock your Mac to attach screenshots."
         let permissionHelp = "Allow Codex Drop in Mac System Settings → Privacy & Security → Accessibility, then share again."
         guard let result, let count = result.totalCount, let verified = result.verifiedCount,
               (1...10).contains(count), (0...count).contains(verified), let items = result.items,
               items.count == count, items.map(\.index).sorted() == Array(0..<count),
               items.filter({ $0.status == "verified" }).count == verified else {
-            return (permissionNeeded ? permissionHelp + "\n" : "") + "Delivery needs review on the Mac. Images may already be attached. Check before sharing again. No automatic retry."
+            return (unlockNeeded ? unlockHelp + "\n" : "") + (permissionNeeded ? permissionHelp + "\n" : "") + "Delivery needs review on the Mac. Images may already be attached. Check before sharing again. No automatic retry."
         }
         if allVerified(count: count) { return "Attached \(count) \(count == 1 ? "image" : "images"). Message not sent." }
-        var lines = ["\(verified) of \(count) images verified attached."]
+        var lines = unlockNeeded ? [unlockHelp] : []
+        lines.append("\(verified) of \(count) images verified attached.")
         for item in items.sorted(by: { $0.index < $1.index }) where item.status != "verified" {
             switch item.status {
             case "uncertain": lines.append("Image \(item.index + 1): uncertain; it may already be attached.")

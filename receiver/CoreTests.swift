@@ -12,6 +12,7 @@ final class BatchFakeAdapter: DeliveryAdapter {
     private var pastedAt: TimeInterval = 0
     private var acknowledged = false
     func observe() throws -> ComposerSnapshot {
+        if scenario == "screen_locked_between" && restores > 0 { throw DeliveryRefusal(reason: "mac_screen_locked") }
         if scenario == "preflight_diagnostics" {
             throw DeliveryRefusal(reason: "composer_changed_during_focus", diagnostics: ["draftSame": "false", "windowObjectSame": "true"])
         }
@@ -52,6 +53,9 @@ final class FakeAdapter: DeliveryAdapter {
 
     func observe() throws -> ComposerSnapshot {
         observations += 1
+        if scenario == "screen_locked_preflight" || scenario == "screen_locked_staged" && staged || scenario == "screen_locked_after_paste" && pastes > 0 {
+            throw DeliveryRefusal(reason: "mac_screen_locked")
+        }
         let afterPaste = pastes > 0
         let newCount = afterPaste && (scenario != "missing_ack") && now >= (scenario == "delayed" ? 3.5 : 0.1) && (scenario != "transient" || now < 0.15)
         var attachments = existing
@@ -101,6 +105,19 @@ final class FakeAdapter: DeliveryAdapter {
         func check(_ condition: Bool, _ name: String) throws {
             guard condition else { fputs("FAIL: \(name)\n", stderr); throw TestFailure.expected }
             checks += 1
+        }
+        try check(MacSessionLockState.parse(true) == .locked, "true session lock flag yields explicit locked refusal")
+        try check(MacSessionLockState.parse(false) == .unlocked, "false session lock flag is recognized without bypassing composer policy")
+        for value: Any? in [nil, "true", "false", 1, 0, NSNumber(value: 1), NSNull(), ["locked": true]] {
+            try check(MacSessionLockState.parse(value) == .unknown, "missing or unrecognized lock metadata supplies no unlocked evidence")
+        }
+        for phase in ["preflight", "staged", "after_paste"] {
+            let lockedAdapter = FakeAdapter(); lockedAdapter.scenario = "screen_locked_" + phase
+            let locked = DeliveryEngine.run(image: Data([1]), adapter: lockedAdapter)
+            try check(locked.reason == "mac_screen_locked" && locked.status == (phase == "after_paste" ? "uncertain" : "blocked"),
+                      "screen lock keeps the correct before/after-Paste outcome")
+            try check(lockedAdapter.pastes == (phase == "after_paste" ? 1 : 0), "screen lock never retries or pastes after a preflight refusal")
+            try check(lockedAdapter.restores == (phase == "preflight" ? 0 : 1), "screen lock preserves staged cleanup without preflight clipboard access")
         }
         // Reproduce activation readiness without UI or clipboard access. In each
         // sample the native adapter still reads the original pinned editor/window.
@@ -242,7 +259,7 @@ final class FakeAdapter: DeliveryAdapter {
             try check(batchAdapter.pastes == count && batchAdapter.restores == count && intents == Array(0..<count), "\(count) images each pasted once with durable ordered intent")
             try check(batchAdapter.attached["Remove image.png"] == 2 + count && batchAdapter.attached["Remove existing.pdf"] == 1, "duplicate image names and existing attachments preserved")
         }
-        for scenario in ["target_between", "draft_between", "previous_image_lost", "uncertain_second", "clipboard_second", "cancel_second"] {
+        for scenario in ["target_between", "draft_between", "previous_image_lost", "uncertain_second", "clipboard_second", "cancel_second", "screen_locked_between"] {
             let batchAdapter = BatchFakeAdapter(); batchAdapter.scenario = scenario
             let batch = DeliveryEngine.runBatch(images: Array(repeating: Data([1]), count: 3), adapter: batchAdapter)
             let expectedPastes = ["uncertain_second", "clipboard_second"].contains(scenario) ? 2 : 1
