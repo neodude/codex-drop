@@ -8,4 +8,8 @@ trap 'rm -rf "$DROP_TEST_ROOT"' EXIT
   "$DROP_ROOT/macos/LifecycleTestMain.swift" -o "$DROP_TEST_ROOT/LifecycleChecks"
 "$DROP_TEST_ROOT/LifecycleChecks"
 /usr/bin/plutil -lint "$DROP_ROOT/macos/Info.plist"
+/usr/bin/xcrun swiftc -parse-as-library -module-cache-path "$DROP_TEST_ROOT/cache" \
+  "$DROP_ROOT/macos/AppPresentation.swift" "$DROP_ROOT/macos/PresentationTestMain.swift" \
+  -o "$DROP_TEST_ROOT/PresentationChecks"
+"$DROP_TEST_ROOT/PresentationChecks"
 python3 "$DROP_ROOT/macos/test_appkit_quit.py"

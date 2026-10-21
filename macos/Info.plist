@@ -6,7 +6,7 @@
 <key>CFBundleDisplayName</key><string>Codex Drop</string>
 <key>CFBundleExecutable</key><string>CodexDrop</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleVersion</key><string>7</string>
+<key>CFBundleVersion</key><string>8</string>
 <key>CFBundleShortVersionString</key><string>1.0</string>
 <key>CFBundleIconFile</key><string>CodexDrop</string>
 <key>LSUIElement</key><true/>

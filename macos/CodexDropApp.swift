@@ -16,19 +16,22 @@ import Carbon
     private var timer: Timer?
     private var pairingProcess: Process?
     private var quitting = false
+    private var loginLaunch = false
+
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        // Capture the original launch event before initialization can process other events.
+        loginLaunch = AppPresentation.isLoginLaunch(NSAppleEventManager.shared().currentAppleEvent)
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        let event = NSAppleEventManager.shared().currentAppleEvent
-        let loginLaunch = event?.eventID == kAEOpenApplication &&
-            (event?.paramDescriptor(forKeyword: keyAEPropData)?.enumCodeValue == keyAELaunchedAsLogInItem ||
-             event?.paramDescriptor(forKeyword: keyAELaunchedAsLogInItem) != nil)
+        loginLaunch = loginLaunch || AppPresentation.isLoginLaunch(NSAppleEventManager.shared().currentAppleEvent)
         NSApp.setActivationPolicy(.accessory)
         buildWindow()
         let menu = NSMenu()
         let applicationMenu = NSMenu()
         applicationMenu.addItem(withTitle: "Show Codex Drop", action: #selector(showWindow), keyEquivalent: "0").target = self
         applicationMenu.addItem(.separator())
-        applicationMenu.addItem(withTitle: "Quit Codex Drop", action: #selector(quit), keyEquivalent: "q").target = self
+        applicationMenu.addItem(withTitle: "Quit Codex Drop…", action: #selector(quit), keyEquivalent: "q").target = self
         let applicationItem = NSMenuItem(); applicationItem.submenu = applicationMenu
         menu.addItem(applicationItem); NSApp.mainMenu = menu
         do {
@@ -57,7 +60,7 @@ import Carbon
             setLoginEnabled(true) // Requested by the user for this installed utility.
         }
         refreshLogin()
-        if !loginLaunch && !ProcessInfo.processInfo.arguments.contains("--background") { showWindow() }
+        if AppPresentation.shouldShowWindow(loginLaunch: loginLaunch, arguments: ProcessInfo.processInfo.arguments) { showWindow() }
     }
     private func buildWindow() {
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 410, height: 455),
@@ -80,8 +83,9 @@ import Carbon
         let settings = NSButton(title: "Accessibility Settings…", target: self, action: #selector(accessibilitySettings))
         let project = NSButton(title: "Reveal Project", target: self, action: #selector(revealProject))
         let log = NSButton(title: "Reveal Receiver Log", target: self, action: #selector(revealLog))
-        let quit = NSButton(title: "Quit Codex Drop", target: self, action: #selector(quit))
-        for button in [start, stop, pair, settings, project, log, quit] { button.target = self; button.bezelStyle = .rounded }
+        let close = NSButton(title: "Close Window", target: self, action: #selector(closeWindow))
+        let quit = NSButton(title: "Quit Codex Drop…", target: self, action: #selector(quit))
+        for button in [start, stop, pair, settings, project, log, close, quit] { button.target = self; button.bezelStyle = .rounded }
         login.target = self
         let loginSettings = NSButton(title: "Login Items Settings…", target: self, action: #selector(loginItemSettings))
         loginSettings.bezelStyle = .rounded
@@ -93,7 +97,8 @@ import Carbon
         let startup = NSStackView(views: [login, loginSettings]); startup.spacing = 12
         let background = NSTextField(wrappingLabelWithString: "Closing this window keeps the receiver running. Reopen Codex Drop from Finder or Spotlight. Quit stops the receiver.")
         background.font = .systemFont(ofSize: 11); background.textColor = .secondaryLabelColor
-        let stack = NSStackView(views: [header, status, accessibility, note, first, second, third, startup, background, quit])
+        let actions = row([close, quit])
+        let stack = NSStackView(views: [header, status, accessibility, note, first, second, third, startup, background, actions])
         stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 12
         stack.setCustomSpacing(18, after: header)
         stack.translatesAutoresizingMaskIntoConstraints = false
@@ -102,8 +107,9 @@ import Carbon
             stack.trailingAnchor.constraint(equalTo: window.contentView!.trailingAnchor, constant: -24),
             stack.topAnchor.constraint(equalTo: window.contentView!.topAnchor, constant: 24),
             stack.bottomAnchor.constraint(lessThanOrEqualTo: window.contentView!.bottomAnchor, constant: -20)])
-        for view in [status, note, first, second, third, background] { view.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true }
+        for view in [status, note, first, second, third, background, actions] { view.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true }
     }
+    @objc private func closeWindow() { window.close() }
     @objc private func showWindow() { window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true) }
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool { showWindow(); return true }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
@@ -192,7 +198,12 @@ import Carbon
         guard let log = controller?.configuration.log else { return }
         NSWorkspace.shared.activateFileViewerSelecting([log])
     }
-    @objc private func quit() { NSApp.terminate(nil) }
+    @objc private func quit() {
+        guard !quitting else { return }
+        NSApp.activate(ignoringOtherApps: true)
+        guard AppPresentation.quitAlert().runModal() == .alertSecondButtonReturn else { return }
+        NSApp.terminate(nil)
+    }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         pairingProcess?.terminate(); pairingProcess = nil
         guard controller?.isRunning == true else { return .terminateNow }
