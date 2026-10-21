@@ -1,0 +1,49 @@
+name: CodexShot
+options:
+  bundleIdPrefix: guide.guidelabs
+  deploymentTarget:
+    iOS: '18.0'
+settings:
+  base:
+    SWIFT_VERSION: '6.0'
+    TARGETED_DEVICE_FAMILY: '1'
+    CODE_SIGN_STYLE: Automatic
+    DEVELOPMENT_TEAM: YOUR_TEAM_ID
+    CURRENT_PROJECT_VERSION: '6'
+    MARKETING_VERSION: '1.0'
+targets:
+  CodexShot:
+    type: application
+    platform: iOS
+    sources:
+      - path: App
+        excludes: ['Info.plist', '*.entitlements']
+      - path: Shared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: guide.guidelabs.CodexShot
+        INFOPLIST_FILE: App/Info.plist
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        CODE_SIGN_ENTITLEMENTS: App/CodexShot.entitlements
+    dependencies:
+      - target: CodexShare
+        embed: true
+  CodexShare:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: Share
+        excludes: ['Info.plist', '*.entitlements']
+      - path: Shared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: guide.guidelabs.CodexShot.Share
+        INFOPLIST_FILE: Share/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Share/CodexShot.entitlements
+        APPLICATION_EXTENSION_API_ONLY: YES
+        SKIP_INSTALL: YES
+schemes:
+  CodexShot:
+    build:
+      targets:
+        CodexShot: all

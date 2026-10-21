@@ -1,0 +1,3 @@
+Harmless local test attachment for the Codex screenshot receiver.
+Keep this file attached during the three final live checks.
+Remove it when finished. No message should be sent during these tests.
