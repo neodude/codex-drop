@@ -32,3 +32,11 @@ iphone/.build/
 iphone/DerivedData/
 iphone/*.xcodeproj/
 iphone/*.xcworkspace/
+
+# Android generated builds, local SDK settings, and signing credentials
+android/.gradle/
+android/.kotlin/
+android/**/build/
+android/local.properties
+android/*.jks
+android/*.keystore
