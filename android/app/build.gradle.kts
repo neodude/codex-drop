@@ -2,7 +2,7 @@ plugins { id("com.android.application"); id("org.jetbrains.kotlin.plugin.compose
 android {
     namespace = "guide.guidelabs.codexdrop"
     compileSdk = 37
-    defaultConfig { applicationId = "guide.guidelabs.codexdrop"; minSdk = 28; targetSdk = 37; versionCode = 1; versionName = "1.0"; testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner" }
+    defaultConfig { applicationId = "guide.guidelabs.codexdrop"; minSdk = 28; targetSdk = 37; versionCode = 2; versionName = "1.0"; testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner" }
     buildFeatures { compose = true }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
 }
