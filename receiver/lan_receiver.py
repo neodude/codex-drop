@@ -11,8 +11,6 @@ import re
 import secrets
 import signal
 import ssl
-import sqlite3
-import time
 import subprocess
 import tempfile
 import threading
@@ -20,7 +18,7 @@ import uuid
 
 from runtime_storage import prepare_storage
 
-from mac_receiver import ROOT, DeliveryWorker, JobQueue, make_server, native_delivery, process_lock, token_for, native_root
+from mac_receiver import ROOT, DeliveryWorker, JobQueue, make_server, native_delivery, process_lock, token_for, native_root, consume_queue
 
 
 def private_write(path, data):
@@ -125,20 +123,7 @@ def main():
                 cleanup.callback(stop_process, pairing)
             stop=threading.Event(); worker=DeliveryWorker(queue,native_delivery,max_queue_age=3)
             def consume():
-                next_cleanup = last_cleanup_check = 0.0
-                while not stop.is_set():
-                    now = time.time()
-                    if now >= next_cleanup or now < last_cleanup_check:
-                        last_cleanup_check = now
-                        try:
-                            result = queue.cleanup_expired()
-                            next_cleanup = now + (86400 if result is not None else 3600)
-                            if result and result["failures"]:
-                                print("Screenshot retention had file-removal failures; retrying next day.", flush=True)
-                        except (OSError, ValueError, sqlite3.Error):
-                            next_cleanup = now + 3600
-                            print("Screenshot retention cleanup deferred; inspect storage permissions.", flush=True)
-                    if not worker.once(): stop.wait(0.15)
+                consume_queue(queue, worker, stop)
             thread=threading.Thread(target=consume,daemon=True); thread.start()
             def stop_worker():
                 stop.set(); thread.join() # Native delivery has its own bounded timeout and clipboard cleanup.

@@ -324,7 +324,8 @@ class JobQueue:
             db.execute("INSERT OR REPLACE INTO maintenance VALUES ('retention',?)", (now,))
         removed = failures = 0
         # Names are derived from our UUID IDs, not paths supplied by a queue row.
-        pattern = re.compile(r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:-[0-9])?(?:\.png|\.result\.json|\.result\.manifest\.json)")
+        uuid_pattern = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+        pattern = re.compile(rf"({uuid_pattern})(?:-[0-9])?(?:\.png|\.result\.json|\.result\.manifest\.json|(?P<temporary>\.tmp-{uuid_pattern}))")
         images = self.directory / "images"
         if images.is_symlink(): raise ValueError("Unsafe screenshot directory")
         for path in images.iterdir():
@@ -333,6 +334,9 @@ class JobQueue:
             try:
                 info = path.lstat()
                 if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid(): continue
+                # A crash can leave persist_image's pre-rename screenshot bytes.
+                # Their own age must expire, even when the receipt is already old.
+                if match["temporary"] and info.st_mtime >= cutoff: continue
                 if match[1] in keys or info.st_mtime < cutoff:
                     # Do not classify a recent known job as an old orphan.
                     if match[1] not in keys:
@@ -380,6 +384,38 @@ class JobQueue:
             result = {"status": "verified" if decision == "attached" else "dismissed", "reason": "user_resolved_" + decision}
             db.execute("UPDATE jobs SET state=?,result=?,updated=? WHERE id=?",
                        (result["status"], json.dumps(result), time.time(), key))
+
+
+class RetentionMaintenance:
+    """Wall-clock maintenance deadlines shared by both supported receivers."""
+    def __init__(self, queue):
+        self.queue = queue
+        self.next_check = self.last_check = None
+
+    def check(self, now=None):
+        now = time.time() if now is None else now
+        if (self.next_check is not None and now < self.next_check and
+                self.last_check is not None and now >= self.last_check):
+            return None
+        self.last_check = now
+        try:
+            result = self.queue.cleanup_expired(now=now)
+            self.next_check = now + (86400 if result is not None else 3600)
+            if result and result["failures"]:
+                print("Screenshot retention had file-removal failures; retrying next day.", flush=True)
+            return result
+        except (OSError, ValueError, sqlite3.Error):
+            self.next_check = now + 3600
+            print("Screenshot retention cleanup deferred; inspect storage permissions.", flush=True)
+            return None
+
+
+def consume_queue(queue, worker, stop):
+    maintenance = RetentionMaintenance(queue)
+    while not stop.is_set():
+        maintenance.check()
+        if not worker.once():
+            stop.wait(0.15)
 
 
 class DeliveryWorker:
@@ -721,9 +757,7 @@ def main():
                 server = make_server(queue, token, args.port)
                 stop = threading.Event()
                 def consume():
-                    while not stop.is_set():
-                        if not worker.once():
-                            stop.wait(0.15)
+                    consume_queue(queue, worker, stop)
                 thread = threading.Thread(target=consume, daemon=True); thread.start()
                 print(f"Receiver listening on 127.0.0.1:{server.server_port}. Token file: {queue.directory / 'http-token'}", flush=True)
                 print("Only a focused, recognized composer can receive an image. Ctrl-C stops the receiver.", flush=True)

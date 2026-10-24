@@ -10,6 +10,7 @@ import unittest
 from unittest import mock
 import uuid
 
+import mac_receiver
 from mac_receiver import JobQueue, Conflict
 from runtime_storage import prepare_storage
 
@@ -55,6 +56,38 @@ class RetentionTests(unittest.TestCase):
         for p in (old,other,outside): os.utime(p,(self.now-40*DAY,)*2)
         self.queue.cleanup_expired(now=self.now)
         self.assertFalse(old.exists()); self.assertTrue(other.exists()); self.assertTrue(outside.exists()); self.assertTrue(link.is_symlink())
+    def test_crashed_upload_temporaries_expire_only_when_owned_old_and_unprotected(self):
+        images=self.queue.directory/'images'
+        def temporary(key=None, index=''):
+            return images/f'{key or uuid.uuid4()}{index}.tmp-{uuid.uuid4()}'
+        old=temporary(); old_batch=temporary(index='-1')
+        expired=self.job(31*DAY); expired_old=temporary(expired); expired_recent=temporary(expired)
+        recent_job=self.job(DAY,'uploading'); active_old=temporary(recent_job)
+        running=self.job(40*DAY,'running'); running_old=temporary(running)
+        recent=temporary(); boundary=temporary(); unowned=temporary()
+        outside=self.queue.directory/f'{uuid.uuid4()}.tmp-{uuid.uuid4()}'
+        malformed=[images/f'{uuid.uuid4()}.tmp-not-a-uuid', images/f'{uuid.uuid4()}.tmp-{uuid.uuid4()}.png',
+                   images/f'{uuid.uuid4()}.tmp-ABCDEFAB-CDEF-4ABC-8ABC-ABCDEFABCDEF', images/f'other.tmp-{uuid.uuid4()}']
+        for path in [old,old_batch,expired_old,expired_recent,active_old,running_old,recent,boundary,unowned,outside,*malformed]:
+            path.write_bytes(PNG)
+            os.utime(path,(self.now-40*DAY,)*2)
+        for path in (expired_recent,recent): os.utime(path,(self.now-DAY,)*2)
+        os.utime(boundary,(self.now-30*DAY,)*2)
+        link=temporary(); link.symlink_to(outside)
+        directory=temporary(); directory.mkdir()
+        original_lstat=Path.lstat
+        def lstat(path,*args,**kwargs):
+            info=original_lstat(path,*args,**kwargs)
+            if path == unowned:
+                fields=list(info); fields[4] += 1
+                return os.stat_result(fields)
+            return info
+        with mock.patch.object(Path,'lstat',lstat): self.queue.cleanup_expired(now=self.now)
+        for path in (old,old_batch,expired_old): self.assertFalse(path.exists(),f'old owned screenshot temporary retained: {path.name}')
+        for path in (expired_recent,active_old,running_old,recent,boundary,unowned,outside,directory,*malformed):
+            self.assertTrue(path.exists(),f'protected/non-owned file removed: {path.name}')
+        self.assertTrue(link.is_symlink())
+
     def test_failed_removal_retries_next_day_and_keeps_receipt(self):
         key=self.job(31*DAY); image=self.queue.directory/'images'/f'{key}.png'
         original=Path.unlink
@@ -74,6 +107,87 @@ class RetentionTests(unittest.TestCase):
         self.assertIsNone(self.queue.cleanup_expired(now=self.now+DAY-1))
         self.assertIsNotNone(self.queue.cleanup_expired(now=self.now+DAY))
         self.assertEqual(token.read_text(),'test credential')
+
+class RetentionScheduleTests(unittest.TestCase):
+    def scheduler(self, result=None):
+        self.assertTrue(callable(getattr(mac_receiver,'RetentionMaintenance',None)), 'shared retention scheduler missing')
+        queue=mock.Mock()
+        queue.cleanup_expired.return_value={'removed':0,'failures':0} if result is None else result
+        return mac_receiver.RetentionMaintenance(queue),queue
+
+    def test_startup_daily_and_sleep_use_wall_clock(self):
+        scheduler,queue=self.scheduler()
+        for now in (1000,1001,1000+DAY-1): scheduler.check(now=now)
+        queue.cleanup_expired.assert_called_once_with(now=1000)
+        scheduler.check(now=1000+DAY)
+        scheduler.check(now=1000+4*DAY)
+        self.assertEqual(queue.cleanup_expired.call_args_list,[mock.call(now=1000),mock.call(now=1000+DAY),mock.call(now=1000+4*DAY)])
+
+    def test_backward_clock_rechecks_without_waiting_for_future_deadline(self):
+        scheduler,queue=self.scheduler()
+        scheduler.check(now=1000); scheduler.check(now=999); scheduler.check(now=1000)
+        self.assertEqual(queue.cleanup_expired.call_args_list,[mock.call(now=1000),mock.call(now=999)])
+
+    def test_persisted_not_due_receipt_is_rechecked_hourly_until_daily_pass(self):
+        scheduler,queue=self.scheduler()
+        queue.cleanup_expired.side_effect=[None,None,{'removed':1,'failures':0}]
+        for now in (1000,4599,4600,8199,8200,8201): scheduler.check(now=now)
+        self.assertEqual(queue.cleanup_expired.call_args_list,[mock.call(now=1000),mock.call(now=4600),mock.call(now=8200)])
+        scheduler.check(now=8200+DAY-1)
+        self.assertEqual(queue.cleanup_expired.call_count,3)
+
+    def test_cleanup_errors_retry_hourly_and_file_removal_failures_daily(self):
+        import sqlite3
+        for error in (OSError('fixture'),ValueError('fixture'),sqlite3.Error('fixture')):
+            with self.subTest(error=type(error).__name__):
+                scheduler,queue=self.scheduler()
+                queue.cleanup_expired.side_effect=[error,{'removed':0,'failures':1},{'removed':1,'failures':0}]
+                with mock.patch('builtins.print') as report:
+                    for now in (1000,4599,4600,4600+DAY-1,4600+DAY): scheduler.check(now=now)
+                self.assertEqual(queue.cleanup_expired.call_args_list,[mock.call(now=1000),mock.call(now=4600),mock.call(now=4600+DAY)])
+                self.assertEqual(report.call_count,2)
+
+    def test_shared_worker_loop_runs_maintenance_before_delivery_without_busy_retry(self):
+        self.assertTrue(callable(getattr(mac_receiver,'consume_queue',None)), 'shared worker loop missing')
+        queue=mock.Mock();queue.cleanup_expired.return_value={'removed':0,'failures':0}
+        worker=mock.Mock();worker.once.side_effect=[False,True]
+        stop=mock.Mock();stop.is_set.side_effect=[False,False,True]
+        order=mock.Mock();order.attach_mock(queue.cleanup_expired,'cleanup');order.attach_mock(worker.once,'delivery')
+        with mock.patch.object(mac_receiver.time,'time',side_effect=[1000,1001]):
+            mac_receiver.consume_queue(queue,worker,stop)
+        self.assertEqual(order.mock_calls,[mock.call.cleanup(now=1000),mock.call.delivery(),mock.call.delivery()])
+        stop.wait.assert_called_once_with(0.15)
+
+    def test_http_and_lan_launch_the_shared_maintenance_worker(self):
+        import lan_receiver
+        class Thread:
+            def __init__(self,target,**kwargs): self.target=target
+            def start(self): self.target()
+            def join(self): pass
+        for module,command in ((mac_receiver,['serve']),(lan_receiver,[])):
+            with self.subTest(module=module.__name__),tempfile.TemporaryDirectory() as directory:
+                root=Path(directory);queue=mock.Mock(directory=root)
+                queue.cleanup_expired.return_value={'removed':0,'failures':0}
+                stop=mock.Mock();stop.is_set.side_effect=[False,True]
+                server=mock.Mock(server_port=9443);server.serve_forever.side_effect=KeyboardInterrupt()
+                process=mock.Mock();process.poll.return_value=0
+                with mock.patch('sys.argv',['receiver','--data-dir',directory,*command]), \
+                     mock.patch.object(module,'ROOT',root/'receiver'), \
+                     mock.patch.object(module,'JobQueue',return_value=queue), \
+                     mock.patch.object(module,'token_for',return_value='fixture-token'), \
+                     mock.patch.object(module,'DeliveryWorker') as worker, \
+                     mock.patch.object(module,'consume_queue',create=True) as consume, \
+                     mock.patch.object(module.threading,'Thread',Thread), \
+                     mock.patch.object(module.threading,'Event',return_value=stop), \
+                     mock.patch.object(module,'process_lock') as lock:
+                    lock.return_value.__enter__.return_value=None
+                    if module is mac_receiver:
+                        with mock.patch.object(module,'make_server',return_value=server): module.main()
+                    else:
+                        with mock.patch.object(module,'prepare_identity',return_value={'service':'fixture','pin':'fixture'}), \
+                             mock.patch.object(module,'make_tls_server',return_value=server), \
+                             mock.patch.object(module.subprocess,'Popen',return_value=process): module.main()
+                    consume.assert_called_once_with(queue,worker.return_value,mock.ANY)
 
 class MigrationTests(unittest.TestCase):
     def setUp(self):
