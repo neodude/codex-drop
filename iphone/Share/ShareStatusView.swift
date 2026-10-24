@@ -51,7 +51,7 @@ import UIKit
         status.textColor = DropBrand.ink
         detail.font = .preferredFont(forTextStyle: .subheadline)
         detail.textColor = DropBrand.secondary
-        spinner.color = DropBrand.lavender
+        spinner.color = DropBrand.aquamarine
         spinner.hidesWhenStopped = true
         spinner.setContentHuggingPriority(.required, for: .horizontal)
         let statusRow = UIStackView(arrangedSubviews: [spinner, status])
@@ -144,7 +144,7 @@ import UIKit
         for (index, dot) in dots.enumerated() {
             let complete = index < (stage ?? 0)
             dot.image = UIImage(systemName: complete ? "checkmark.circle.fill" : "circle.fill")
-            dot.tintColor = complete ? DropBrand.mint : index == stage ? DropBrand.lavender : UIColor(white: 0.4, alpha: 1)
+            dot.tintColor = complete ? DropBrand.mint : index == stage ? DropBrand.aquamarine : UIColor(white: 0.4, alpha: 1)
         }
         if let stage {
             stages.accessibilityLabel = ["Find your Mac", "Transfer images", "Attach to draft"].enumerated().map { index, label in

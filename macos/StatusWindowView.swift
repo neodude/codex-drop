@@ -17,8 +17,8 @@ import AppKit
     private let stateSurface = DropStatusSurface()
     fileprivate static let accent = NSColor(name: nil) { appearance in
         appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            ? NSColor(srgbRed: 179 / 255, green: 185 / 255, blue: 1, alpha: 1)
-            : NSColor(srgbRed: 86 / 255, green: 95 / 255, blue: 219 / 255, alpha: 1)
+            ? NSColor(srgbRed: 47 / 255, green: 1, blue: 211 / 255, alpha: 1)
+            : NSColor(srgbRed: 0, green: 116 / 255, blue: 96 / 255, alpha: 1)
     }
     private static let secondary = NSColor(name: nil) { appearance in
         appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua

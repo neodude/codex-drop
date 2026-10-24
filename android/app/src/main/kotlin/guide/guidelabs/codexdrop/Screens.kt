@@ -22,12 +22,12 @@ import kotlinx.coroutines.flow.StateFlow
 
 private val Ink = Color(0xFFF4F4F7)
 private val Muted = Color(0xFFB3B3BF)
-private val Lavender = Color(0xFFB3B9FF)
+private val Aquamarine = Color(0xFF2FFFD3)
 private val Mint = Color(0xFF69D5C1)
 
 @Composable fun DropTheme(content: @Composable () -> Unit) {
     MaterialTheme(colorScheme = darkColorScheme(
-        primary = Lavender, onPrimary = Color(0xFF191B43),
+        primary = Aquamarine, onPrimary = Color(0xFF062B24),
         background = Color(0xFF101014), onBackground = Ink,
         surface = Color(0xFF1B1B22), onSurface = Ink,
         onSurfaceVariant = Muted, outline = Color(0xFF777782),
@@ -70,7 +70,7 @@ private val Mint = Color(0xFF69D5C1)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 when {
                     index < stage -> Icon(Icons.Filled.CheckCircle, "Completed", Modifier.size(20.dp), tint = Mint)
-                    index == stage -> CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp, color = Lavender)
+                    index == stage -> CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp, color = Aquamarine)
                     else -> RadioButton(selected = false, onClick = null, enabled = false, modifier = Modifier.size(20.dp),
                         colors = RadioButtonDefaults.colors(disabledUnselectedColor = Muted))
                 }
@@ -114,7 +114,7 @@ private val Mint = Color(0xFF69D5C1)
             .padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             listOf("Keep Codex Drop running on your Mac.", "Use the same Wi-Fi on both devices.", "Share 1–10 images → Codex Drop.").forEachIndexed { index, instruction ->
                 Row {
-                    Text("${index + 1}.", color = Lavender, lineHeight = 24.sp, modifier = Modifier.widthIn(min = 24.dp))
+                    Text("${index + 1}.", color = Aquamarine, lineHeight = 24.sp, modifier = Modifier.widthIn(min = 24.dp))
                     Spacer(Modifier.width(10.dp))
                     Text(instruction, lineHeight = 24.sp, color = Muted, modifier = Modifier.weight(1f))
                 }
