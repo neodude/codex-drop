@@ -17,7 +17,7 @@ assert info['CodexDropIconSHA256'] == hashlib.sha256((ROOT / 'assets/CodexDrop-i
 assert Path(info['CodexDropPythonExecutable']).is_file(), 'Rebuild with an installed Python runtime'
 for private in ('receiver-data', 'pairing-code.txt', '*.log'):
     assert not list(app.rglob(private)), f'Private runtime file in bundle: {private}'
-for name in ('MacAttachmentReceiver', 'ReceiverPairing', 'CodexDrop.icns', 'receiver/mac_receiver.py', 'receiver/lan_receiver.py'):
+for name in ('MacAttachmentReceiver', 'ReceiverPairing', 'CodexDrop.icns', 'receiver/mac_receiver.py', 'receiver/lan_receiver.py', 'receiver/runtime_storage.py'):
     assert (resources / name).is_file(), f'Missing resource {name}'
 for name, digest in json.loads((resources / 'BuildManifest.json').read_text()).items():
     assert hashlib.sha256((ROOT / name).read_bytes()).hexdigest() == digest, f'Rebuild required after source change: {name}'
@@ -26,4 +26,4 @@ for executable in (app, resources / 'MacAttachmentReceiver', resources / 'Receiv
     assert 'TeamIdentifier=YOUR_TEAM_ID' in result.stderr, f'Unexpected team for {executable.name}'
     print(f'{executable.name}: Team YOUR_TEAM_ID')
 subprocess.run(['/usr/bin/codesign', '--verify', '--deep', '--strict', str(app)], check=True)
-print('Bundle inspection passed: current source hashes, canonical data root, private files excluded, icon, Python runtime, resources, nested signatures.')
+print('Bundle inspection passed: current source hashes, canonical project root, private files excluded, icon, Python runtime, resources, nested signatures.')

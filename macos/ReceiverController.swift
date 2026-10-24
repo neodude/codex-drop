@@ -3,13 +3,14 @@ import Darwin
 
 enum ReceiverState: String { case stopped, starting, running, stopping, failed }
 enum ReceiverError: Error, LocalizedError {
-    case duplicate, externalReceiver, paused, resources, unsafeFile
+    case duplicate, externalReceiver, paused, resources, unsafeFile, storageMigration
     var errorDescription: String? {
         switch self {
         case .duplicate: "Codex Drop is already open. Use its menu-bar icon."
         case .externalReceiver: "Another receiver is running. Stop its existing launcher before starting Codex Drop."
         case .paused: "The project’s .receiver-paused flag is set. Remove it only when ready to resume."
         case .resources: "The bundled receiver or configured Python is missing. Rebuild Codex Drop."
+        case .storageMigration: "Runtime storage could not be prepared. Close other Codex Drop receivers and inspect the old and Application Support data folders; pairing identities are never merged."
         case .unsafeFile: "Runtime storage must use private, regular files owned by your account."
         }
     }
@@ -19,6 +20,22 @@ struct ReceiverConfiguration {
     let resources: URL
     let python: URL
     let data: URL
+    static func prepareData(project: URL, resources: URL, python: URL) throws -> URL {
+        let destination = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/Codex Drop", isDirectory: true)
+        let process = Process()
+        process.executableURL = python
+        process.arguments = [resources.appendingPathComponent("receiver/runtime_storage.py").path,
+            "--legacy", project.appendingPathComponent("receiver-data").path,
+            "--destination", destination.path]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        process.standardInput = FileHandle.nullDevice
+        try process.run()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else { throw ReceiverError.storageMigration }
+        return destination
+    }
     var log: URL { data.appendingPathComponent("codex-drop.log") }
     var pairing: URL { data.appendingPathComponent("pairing-code.txt") }
     var arguments: [String] { [resources.appendingPathComponent("receiver/lan_receiver.py").path, "--data-dir", data.path] }

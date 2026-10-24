@@ -40,8 +40,10 @@ import Carbon
                   let projectPath = Bundle.main.object(forInfoDictionaryKey: "CodexDropProjectRoot") as? String,
                   let pythonPath = Bundle.main.object(forInfoDictionaryKey: "CodexDropPythonExecutable") as? String else { throw ReceiverError.resources }
             let project = URL(fileURLWithPath: projectPath, isDirectory: true)
+            let python = URL(fileURLWithPath: pythonPath)
+            let data = try ReceiverConfiguration.prepareData(project: project, resources: resources, python: python)
             controller = try ReceiverController(configuration: ReceiverConfiguration(project: project, resources: resources,
-                python: URL(fileURLWithPath: pythonPath), data: project.appendingPathComponent("receiver-data")))
+                python: python, data: data))
         } catch ReceiverError.duplicate {
             NSApp.terminate(nil); return
         } catch {

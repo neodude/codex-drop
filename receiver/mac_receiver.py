@@ -12,6 +12,7 @@ from pathlib import Path
 import re
 import secrets
 import sqlite3
+import stat
 import struct
 import subprocess
 import threading
@@ -25,7 +26,7 @@ MAX_BATCH = 100 * 1024 * 1024
 MAX_BATCH_COUNT = 10
 NATIVE_TIMEOUT = 240
 ROOT = Path(__file__).resolve().parent
-DEFAULT_DATA = ROOT.parent / "receiver-data"
+from runtime_storage import DEFAULT_DATA
 
 
 class Conflict(Exception):
@@ -90,6 +91,8 @@ class JobQueue:
                     state TEXT NOT NULL, created REAL NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
                     result TEXT, updated REAL NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS expired_images (job_id TEXT PRIMARY KEY, expired REAL NOT NULL);
+                CREATE TABLE IF NOT EXISTS maintenance (name TEXT PRIMARY KEY, performed REAL NOT NULL);
                 CREATE TABLE IF NOT EXISTS batches (
                     id TEXT PRIMARY KEY REFERENCES jobs(id), count INTEGER NOT NULL
                 );
@@ -300,6 +303,45 @@ class JobQueue:
             # Other jobs have their own destination-age guard at claim time.
             # A terminal result never requeues itself or quarantines another batch.
 
+    def cleanup_expired(self, now=None):
+        """Daily 30-day screenshot retention. Receipts remain, never replay old bytes."""
+        now = time.time() if now is None else now
+        cutoff = now - 30 * 86400
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            previous = db.execute("SELECT performed FROM maintenance WHERE name='retention'").fetchone()
+            if previous and 0 <= now - previous[0] < 86400:
+                return None
+            # A live delivery can outlive its normal timeout: never remove its files.
+            protected = {row[0] for row in db.execute("SELECT id FROM jobs WHERE state='running'")}
+            expired = db.execute("SELECT id,state FROM jobs WHERE created<? AND state!='running'", (cutoff,)).fetchall()
+            keys = {row["id"] for row in expired}
+            for row in expired:
+                if row["state"] in ("uploading", "queued"):
+                    db.execute("UPDATE jobs SET state='blocked',result=?,updated=? WHERE id=?",
+                               (json.dumps({"status":"blocked","pasteAttempted":False,"reason":"screenshots_expired"}),now,row["id"]))
+                db.execute("INSERT OR IGNORE INTO expired_images VALUES (?,?)", (row["id"],now))
+            db.execute("INSERT OR REPLACE INTO maintenance VALUES ('retention',?)", (now,))
+        removed = failures = 0
+        # Names are derived from our UUID IDs, not paths supplied by a queue row.
+        pattern = re.compile(r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:-[0-9])?(?:\.png|\.result\.json|\.result\.manifest\.json)")
+        images = self.directory / "images"
+        if images.is_symlink(): raise ValueError("Unsafe screenshot directory")
+        for path in images.iterdir():
+            match = pattern.fullmatch(path.name)
+            if not match or match[1] in protected or path.is_symlink(): continue
+            try:
+                info = path.lstat()
+                if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid(): continue
+                if match[1] in keys or info.st_mtime < cutoff:
+                    # Do not classify a recent known job as an old orphan.
+                    if match[1] not in keys:
+                        with self.connect() as db:
+                            if db.execute("SELECT 1 FROM jobs WHERE id=?",(match[1],)).fetchone(): continue
+                    path.unlink(); removed += 1
+            except OSError: failures += 1
+        return {"removed":removed,"failures":failures}
+
     def recover(self, pause_queued=True):
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
@@ -320,6 +362,8 @@ class JobQueue:
     def retry(self, key):
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
+            if db.execute("SELECT 1 FROM expired_images WHERE job_id=?", (key,)).fetchone():
+                raise Conflict("Screenshot files expired; share a new request instead")
             row = db.execute("SELECT * FROM jobs WHERE id=?", (key,)).fetchone()
             if not row or row["state"] != "blocked" or json.loads(row["result"]).get("pasteAttempted") is not False:
                 raise Conflict("Only a blocked, unattempted job can retry; resolve uncertain jobs explicitly")
@@ -641,7 +685,7 @@ def process_lock(queue):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--data-dir", type=Path, default=DEFAULT_DATA)
+    parser.add_argument("--data-dir", type=Path)
     commands = parser.add_subparsers(dest="command", required=True)
     enqueue = commands.add_parser("enqueue"); enqueue.add_argument("image", type=Path); enqueue.add_argument("--id", default=None)
     commands.add_parser("status")
@@ -651,7 +695,9 @@ def main():
     serve = commands.add_parser("serve"); serve.add_argument("--port", type=int, default=9237)
     args = parser.parse_args()
     os.umask(0o077)
-    queue = JobQueue(args.data_dir)
+    from runtime_storage import prepare_storage
+    data = args.data_dir if args.data_dir is not None else prepare_storage(ROOT.parent / "receiver-data")
+    queue = JobQueue(data)
     if args.command == "enqueue":
         print(json.dumps(queue.enqueue(args.id or str(uuid.uuid4()), args.image.read_bytes()), indent=2))
     elif args.command == "status":

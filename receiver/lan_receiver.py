@@ -11,12 +11,16 @@ import re
 import secrets
 import signal
 import ssl
+import sqlite3
+import time
 import subprocess
 import tempfile
 import threading
 import uuid
 
-from mac_receiver import DEFAULT_DATA, ROOT, DeliveryWorker, JobQueue, make_server, native_delivery, process_lock, token_for, native_root
+from runtime_storage import prepare_storage
+
+from mac_receiver import ROOT, DeliveryWorker, JobQueue, make_server, native_delivery, process_lock, token_for, native_root
 
 
 def private_write(path, data):
@@ -86,11 +90,12 @@ def make_tls_server(queue, token, directory, port=9443, bind_host='0.0.0.0'):
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--data-dir',type=Path,default=DEFAULT_DATA)
+    parser.add_argument('--data-dir',type=Path)
     parser.add_argument('--port',type=int,default=9443)
     parser.add_argument('--show-pairing',action='store_true')
     args=parser.parse_args(); os.umask(0o077)
-    queue=JobQueue(args.data_dir)
+    data = args.data_dir if args.data_dir is not None else prepare_storage(ROOT.parent / "receiver-data")
+    queue=JobQueue(data)
     if (ROOT.parent/'.receiver-paused').exists(): raise ValueError('Receiver is paused')
     def interrupt(*_): raise KeyboardInterrupt
     def stop_process(process):
@@ -120,7 +125,19 @@ def main():
                 cleanup.callback(stop_process, pairing)
             stop=threading.Event(); worker=DeliveryWorker(queue,native_delivery,max_queue_age=3)
             def consume():
+                next_cleanup = last_cleanup_check = 0.0
                 while not stop.is_set():
+                    now = time.time()
+                    if now >= next_cleanup or now < last_cleanup_check:
+                        last_cleanup_check = now
+                        try:
+                            result = queue.cleanup_expired()
+                            next_cleanup = now + (86400 if result is not None else 3600)
+                            if result and result["failures"]:
+                                print("Screenshot retention had file-removal failures; retrying next day.", flush=True)
+                        except (OSError, ValueError, sqlite3.Error):
+                            next_cleanup = now + 3600
+                            print("Screenshot retention cleanup deferred; inspect storage permissions.", flush=True)
                     if not worker.once(): stop.wait(0.15)
             thread=threading.Thread(target=consume,daemon=True); thread.start()
             def stop_worker():
