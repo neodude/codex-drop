@@ -10,4 +10,5 @@ zsh "$RECEIVER_ROOT/receiver/build.zsh"
 "$RECEIVER_ROOT/.codex-artifacts/checks/core-tests"
 python3 -m unittest discover -s receiver -p 'test_receiver.py'
 python3 -m unittest discover -s receiver -p 'test_native_batch.py'
+python3 -m unittest discover -s receiver -p 'test_storage.py'
 "$RECEIVER_ROOT/MacAttachmentReceiver" --self-test
