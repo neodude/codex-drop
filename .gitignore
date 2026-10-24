@@ -8,7 +8,7 @@ receiver-data/
 __pycache__/
 *.py[cod]
 
-# Credentials and signing material
+# Credentials and signing material (at any nesting depth)
 .env
 .env.*
 !.env.example
@@ -16,27 +16,37 @@ __pycache__/
 *.key
 *.p8
 *.p12
+*.pfx
+*.jks
+*.keystore
 *.mobileprovision
 *.provisionprofile
+codex-drop.local.json
+keystore.properties
 
-# Generated local executables and application bundles
-/Codex Drop.app/
+# Local Apple signing configuration and generated projects
+iphone/Local.xcconfig
+iphone/*.xcodeproj/
+iphone/*.xcworkspace/
+iphone/build/
+iphone/.build/
+iphone/DerivedData/
+
+# Generated local executables, bundles, and export products
+*.app/
+*.ipa
+*.apk
+*.aab
+*.apks
+*.xcarchive/
+*.dSYM/
 /MacAttachmentReceiver
 /ReceiverPairing
 /AttachmentProbe
 /FixtureHost
-/AttachmentFixture.app/
-/ReceiverFixture.app/
-iphone/build/
-iphone/.build/
-iphone/DerivedData/
-iphone/*.xcodeproj/
-iphone/*.xcworkspace/
 
-# Android generated builds, local SDK settings, and signing credentials
+# Android generated builds and local SDK/signing configuration
 android/.gradle/
 android/.kotlin/
 android/**/build/
 android/local.properties
-android/*.jks
-android/*.keystore

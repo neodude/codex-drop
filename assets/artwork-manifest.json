@@ -1,0 +1,63 @@
+{
+  "generated_on": "2026-10-24",
+  "generator": "built-in image generation",
+  "platform_resizer": "macOS sips",
+  "files": [
+    {
+      "path": "assets/CodexDrop-icon-master.png",
+      "width": 1254,
+      "height": 1254,
+      "alpha": false,
+      "bytes": 1541636,
+      "sha256": "f8fd191d94cabac0fe53d1626d4c5bdeb612ecbb4dba87a29094c6375e05ed53"
+    },
+    {
+      "path": "assets/CodexDrop-icon.png",
+      "width": 1024,
+      "height": 1024,
+      "alpha": false,
+      "bytes": 1060735,
+      "sha256": "0b96e7c1dfdae63a5de130536d3035fcdf266cbc7e322fb5722a9113142902eb"
+    },
+    {
+      "path": "assets/DropMark.png",
+      "width": 1254,
+      "height": 1254,
+      "alpha": true,
+      "bytes": 1141050,
+      "sha256": "8f3e024e825e6fe46346ba8adf81120c0c592ac28200effe28661c0f399f9381"
+    },
+    {
+      "path": "iphone/App/Assets.xcassets/AppIcon.appiconset/CodexDrop-icon.png",
+      "width": 1024,
+      "height": 1024,
+      "alpha": false,
+      "bytes": 1060735,
+      "sha256": "0b96e7c1dfdae63a5de130536d3035fcdf266cbc7e322fb5722a9113142902eb"
+    },
+    {
+      "path": "iphone/App/Assets.xcassets/DropMark.imageset/DropMark.png",
+      "width": 1254,
+      "height": 1254,
+      "alpha": true,
+      "bytes": 1141050,
+      "sha256": "8f3e024e825e6fe46346ba8adf81120c0c592ac28200effe28661c0f399f9381"
+    },
+    {
+      "path": "iphone/Share/Assets.xcassets/DropMark.imageset/DropMark.png",
+      "width": 1254,
+      "height": 1254,
+      "alpha": true,
+      "bytes": 1141050,
+      "sha256": "8f3e024e825e6fe46346ba8adf81120c0c592ac28200effe28661c0f399f9381"
+    },
+    {
+      "path": "android/app/src/main/res/drawable-nodpi/drop_mark.png",
+      "width": 1254,
+      "height": 1254,
+      "alpha": true,
+      "bytes": 1141050,
+      "sha256": "8f3e024e825e6fe46346ba8adf81120c0c592ac28200effe28661c0f399f9381"
+    }
+  ]
+}

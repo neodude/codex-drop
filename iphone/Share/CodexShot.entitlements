@@ -4,7 +4,7 @@
 <dict>
 	<key>keychain-access-groups</key>
 	<array>
-		<string>$(AppIdentifierPrefix)guide.guidelabs.CodexShot.shared</string>
+		<string>$(AppIdentifierPrefix)$(CODEX_DROP_KEYCHAIN_GROUP_SUFFIX)</string>
 	</array>
 </dict>
 </plist>

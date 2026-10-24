@@ -47,6 +47,6 @@
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Find your paired Mac and attach screenshots to its focused Codex composer.</string>
 	<key>SharedKeychainGroup</key>
-	<string>$(AppIdentifierPrefix)guide.guidelabs.CodexShot.shared</string>
+	<string>$(AppIdentifierPrefix)$(CODEX_DROP_KEYCHAIN_GROUP_SUFFIX)</string>
 </dict>
 </plist>

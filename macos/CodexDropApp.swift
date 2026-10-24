@@ -59,9 +59,8 @@ import Carbon
         RunLoop.main.add(refreshTimer, forMode: .common)
         RunLoop.main.add(refreshTimer, forMode: .modalPanel)
         timer = refreshTimer
-        if !UserDefaults.standard.bool(forKey: "LoginItemConfigured") {
-            setLoginEnabled(true) // Requested by the user for this installed utility.
-        }
+        // Login registration changes only when the user toggles Open at Login.
+        // Existing registrations remain intact; a new installation starts opted out.
         refreshLogin()
         if AppPresentation.shouldShowWindow(loginLaunch: loginLaunch, arguments: ProcessInfo.processInfo.arguments) { showWindow() }
     }

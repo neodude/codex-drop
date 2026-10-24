@@ -1,0 +1,6 @@
+{
+  "apple_team_id": "YOURTEAMID",
+  "ios_bundle_id": "guide.guidelabs.codexdrop",
+  "mac_bundle_id": "guide.guidelabs.codexdrop.mac",
+  "keychain_group_suffix": "guide.guidelabs.codexdrop.shared"
+}

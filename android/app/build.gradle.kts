@@ -1,8 +1,38 @@
+import java.util.Properties
+
 plugins { id("com.android.application"); id("org.jetbrains.kotlin.plugin.compose") }
+// Keep signing credentials in ignored local.properties or environment variables.
+// An unconfigured release is unsigned; explicit incomplete configuration is an error.
+val localSigningProperties = Properties().apply {
+    val propertiesFile = rootProject.file("local.properties")
+    if (propertiesFile.isFile) propertiesFile.inputStream().use { load(it) }
+}
+fun releaseSigningValue(property: String, environment: String): String? =
+    providers.environmentVariable(environment).orNull ?: localSigningProperties.getProperty(property)
+val releaseStoreFile = releaseSigningValue("codexDrop.storeFile", "CODEX_DROP_ANDROID_STORE_FILE")
+val releaseStorePassword = releaseSigningValue("codexDrop.storePassword", "CODEX_DROP_ANDROID_STORE_PASSWORD")
+val releaseKeyAlias = releaseSigningValue("codexDrop.keyAlias", "CODEX_DROP_ANDROID_KEY_ALIAS")
+val releaseKeyPassword = releaseSigningValue("codexDrop.keyPassword", "CODEX_DROP_ANDROID_KEY_PASSWORD")
+val releaseSigningValues = listOf(releaseStoreFile, releaseStorePassword, releaseKeyAlias, releaseKeyPassword)
+val hasReleaseSigning = releaseSigningValues.any { it != null }
+require(!hasReleaseSigning || releaseSigningValues.all { !it.isNullOrBlank() }) {
+    "Incomplete Android release signing: configure all four codexDrop signing properties or CODEX_DROP_ANDROID signing environment variables."
+}
+
 android {
     namespace = "guide.guidelabs.codexdrop"
     compileSdk = 37
-    defaultConfig { applicationId = "guide.guidelabs.codexdrop"; minSdk = 28; targetSdk = 37; versionCode = 2; versionName = "1.0"; testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner" }
+    defaultConfig { applicationId = "guide.guidelabs.codexdrop"; minSdk = 28; targetSdk = 37; versionCode = 3; versionName = "1.0"; testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner" }
+    if (hasReleaseSigning) {
+        val persistentRelease = signingConfigs.create("persistentRelease") {
+            // Relative paths resolve from android/, alongside local.properties.
+            storeFile = rootProject.file(requireNotNull(releaseStoreFile))
+            storePassword = releaseStorePassword
+            keyAlias = releaseKeyAlias
+            keyPassword = releaseKeyPassword
+        }
+        buildTypes.getByName("release").signingConfig = persistentRelease
+    }
     buildFeatures { compose = true }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
 }
