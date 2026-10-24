@@ -4,6 +4,7 @@ import tempfile
 import unittest
 
 from lan_receiver import pairing_payload, prepare_identity
+from test_receiver import generated_png
 
 class LANIdentityTests(unittest.TestCase):
     def test_identity_is_private_and_stable(self):
@@ -49,11 +50,11 @@ class LANTLSTests(unittest.TestCase):
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True); self.thread.start()
     def tearDown(self):
         self.server.shutdown(); self.server.server_close(); self.thread.join(timeout=2); self.temp.cleanup()
-    def request(self, method, path, body=None, authorized=True):
+    def request(self, method, path, body=None, authorized=True, content_type="image/png", request_id=None):
         import http.client, ssl
         context=ssl._create_unverified_context() # Test harness verifies the actual DER pin below; iPhone uses its pin delegate.
         client=http.client.HTTPSConnection('127.0.0.1',self.server.server_port,context=context,timeout=3)
-        headers={'Content-Type':'image/png','X-Request-ID':'1b2db6c3-6212-4c15-9078-cf8b5697f8a7'}
+        headers={'Content-Type':content_type,'X-Request-ID':request_id or '1b2db6c3-6212-4c15-9078-cf8b5697f8a7'}
         if authorized: headers['Authorization']='Bearer '+self.token
         try:
             client.connect()
@@ -86,6 +87,123 @@ class LANTLSTests(unittest.TestCase):
             self.assertEqual(receipt['job']['state'],'queued' if index==3 else 'uploading')
         client.sendall(self.raw_request(path='/v1/jobs/'+key))
         self.assertEqual(self.read_response(client)[1]['state'],'queued')
+
+    def test_exact_50_mib_png_is_accepted_over_https(self):
+        status, receipt = self.request('POST', '/v1/screenshots', generated_png(padded_size=50 * 1024 * 1024), content_type='application/octet-stream')
+        self.assertEqual(status, 202)
+        self.assertTrue(receipt['received'])
+        self.assertEqual(len(self.queue.list()), 1)
+
+    def test_50_mib_plus_one_content_length_rejected_before_upload(self):
+        for route in ('/v1/screenshots', '/v1/batches/1b2db6c3-6212-4c15-9078-cf8b5697f8a7/images/0'):
+            with self.subTest(route=route):
+                client = self.tls_socket()
+                client.sendall(self.raw_request('POST', route,
+                    f'Content-Type: application/octet-stream\r\nContent-Length: {50 * 1024 * 1024 + 1}\r\n'))
+                response, receipt = self.read_response(client)
+                self.assertEqual(response.status, 413)
+                self.assertEqual(receipt['error'], 'image_size_limit')
+                self.assertIn('50 MiB', receipt['message'])
+                self.assertTrue(response.will_close)
+        self.assertEqual(self.queue.list(), [])
+
+    def test_original_file_transfer_has_no_decoded_pixel_limit_over_https(self):
+        status, receipt = self.request('POST', '/v1/screenshots', generated_png(32769, 1), content_type='application/octet-stream')
+        self.assertEqual(status, 202)
+        self.assertTrue(receipt['received'])
+        self.assertEqual(len(self.queue.list()), 1)
+
+    def test_generic_original_upload_preserves_every_supported_format(self):
+        import hashlib, uuid
+        from test_original_images import original_samples, supported_original_samples
+        for suffix, data in supported_original_samples().items():
+            with self.subTest(suffix=suffix):
+                key = str(uuid.uuid4())
+                status, receipt = self.request('POST', '/v1/screenshots', data,
+                    content_type='application/octet-stream', request_id=key)
+                self.assertEqual(status, 202)
+                image = self.root/'images'/f'{key}.{suffix}'
+                self.assertEqual(image.read_bytes(), data)
+                self.assertEqual(receipt['job']['sha256'], hashlib.sha256(data).hexdigest())
+                self.assertEqual(image.stat().st_mode & 0o777, 0o600)
+
+    def test_actual_file_header_wins_over_legacy_png_mime(self):
+        from test_original_images import original_samples, supported_original_samples
+        data = original_samples()['jpg']
+        status, receipt = self.request('POST', '/v1/screenshots', data)
+        self.assertEqual(status, 202)
+        image = self.root/'images'/(receipt['job']['id']+'.jpg')
+        self.assertEqual(image.read_bytes(), data)
+        self.assertFalse(image.with_suffix('.png').exists())
+
+    def test_generic_mixed_batch_original_uploads_use_one_pinned_socket(self):
+        import hashlib
+        from test_original_images import original_samples, supported_original_samples
+        key = '1b2db6c3-6212-4c15-9078-cf8b5697f8a7'
+        samples = list(supported_original_samples().items())
+        steps = [('/v1/batches', json.dumps({'count': len(samples)}).encode(), 'application/json')]
+        steps += [(f'/v1/batches/{key}/images/{index}', data, 'application/octet-stream')
+                  for index, (_, data) in enumerate(samples)]
+        steps += [(f'/v1/batches/{key}/commit', b'{}', 'application/json')]
+        client = self.tls_socket()
+        for route, data, content in steps:
+            client.sendall(self.raw_request('POST', route, f'Content-Type: {content}\r\nContent-Length: {len(data)}\r\nX-Request-ID: {key}\r\n', data))
+            response, receipt = self.read_response(client)
+            self.assertEqual(response.status, 202)
+        self.assertEqual(receipt['job']['state'], 'queued')
+        job = self.queue.claim()
+        for item, (suffix, data) in zip(job['images'], samples):
+            self.assertEqual(Path(item['path']).suffix, '.'+suffix)
+            self.assertEqual(Path(item['path']).read_bytes(), data)
+            self.assertEqual(item['sha256'], hashlib.sha256(data).hexdigest())
+
+    def test_heic_heif_http_refusal_leaves_no_image_or_delivery_and_fresh_share_works(self):
+        import uuid
+        from unittest.mock import Mock
+        from mac_receiver import DeliveryWorker
+        from test_original_images import original_samples, HEIC_REFUSAL_MESSAGE
+        backend = Mock()
+        for suffix in ('heic', 'heif'):
+            data = original_samples()[suffix]
+            status, receipt = self.request('POST', '/v1/screenshots', data,
+                content_type='application/octet-stream', request_id=str(uuid.uuid4()))
+            self.assertEqual(status, 400)
+            self.assertEqual(receipt, {'error': 'unsupported_image_format', 'message': HEIC_REFUSAL_MESSAGE})
+            self.assertEqual(list((self.root/'images').iterdir()), [])
+            key = str(uuid.uuid4())
+            self.assertEqual(self.request('POST', '/v1/batches', b'{"count":1}',
+                content_type='application/json', request_id=key)[0], 202)
+            status, receipt = self.request('POST', f'/v1/batches/{key}/images/0', data,
+                content_type='application/octet-stream', request_id=key)
+            self.assertEqual(status, 400)
+            self.assertEqual(receipt, {'error': 'unsupported_image_format', 'message': HEIC_REFUSAL_MESSAGE})
+            self.assertEqual(self.request('POST', f'/v1/batches/{key}/commit', b'{}',
+                content_type='application/json', request_id=key)[0], 409)
+            self.assertEqual(list((self.root/'images').iterdir()), [])
+            self.assertFalse(DeliveryWorker(self.queue, backend).once())
+        backend.assert_not_called()
+        jpeg = original_samples()['jpg']; fresh_key = str(uuid.uuid4())
+        status, receipt = self.request('POST', '/v1/screenshots', jpeg,
+            content_type='application/octet-stream', request_id=fresh_key)
+        self.assertEqual(status, 202)
+        self.assertEqual(self.queue.claim()['id'], fresh_key)
+        self.assertEqual((self.root/'images'/f'{fresh_key}.jpg').read_bytes(), jpeg)
+
+    def test_legacy_staged_heic_commit_returns_actionable_policy_error(self):
+        import hashlib, uuid
+        from test_original_images import original_samples, HEIC_REFUSAL_MESSAGE
+        for suffix in ('heic', 'heif'):
+            key = str(uuid.uuid4()); data = original_samples()[suffix]
+            self.queue.create_batch(key, 1)
+            path = self.root/'images'/f'{key}-0.{suffix}'; path.write_bytes(data); path.chmod(0o600)
+            with self.queue.connect() as db:
+                db.execute('INSERT INTO batch_images VALUES (?,?,?,?,?)', (key, 0, str(path), hashlib.sha256(data).hexdigest(), len(data)))
+            status, receipt = self.request('POST', f'/v1/batches/{key}/commit', b'{}',
+                content_type='application/json', request_id=key)
+            self.assertEqual(status, 400)
+            self.assertEqual(receipt, {'error': 'unsupported_image_format', 'message': HEIC_REFUSAL_MESSAGE})
+            self.assertEqual(self.queue.get(key)['state'], 'uploading')
+            self.assertIsNone(self.queue.claim())
 
     def test_invalid_image_is_not_queued(self):
         self.assertEqual(self.request('POST','/v1/screenshots',b'x'*40)[0],400)

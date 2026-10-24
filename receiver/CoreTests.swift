@@ -26,7 +26,7 @@ final class BatchFakeAdapter: DeliveryAdapter {
     func prepare() throws {
         if scenario == "cancel_second" && restores > 0 { throw DeliveryRefusal(reason: "interrupted") }
     }
-    func stage(_ png: Data) throws { clipboardOwned = true }
+    func stage(_ image: OriginalImage) throws { clipboardOwned = true }
     func paste() throws { pastes += 1; pastedAt = now; acknowledged = false }
     func restore() -> String {
         restores += 1
@@ -48,6 +48,7 @@ final class FakeAdapter: DeliveryAdapter {
     var restores = 0
     var staged = false
     var scenario = "success"
+    var attachmentExtension = "png"
     var originalDraft = "draft\n🧗"
     var existing = ["Remove existing.pdf": 1]
 
@@ -59,7 +60,7 @@ final class FakeAdapter: DeliveryAdapter {
         let afterPaste = pastes > 0
         let newCount = afterPaste && (scenario != "missing_ack") && now >= (scenario == "delayed" ? 3.5 : 0.1) && (scenario != "transient" || now < 0.15)
         var attachments = existing
-        if newCount { attachments["Remove image.png", default: 0] += 1 }
+        if newCount { attachments["Remove image." + attachmentExtension, default: 0] += 1 }
         if afterPaste && scenario == "attachment_lost" { attachments.removeValue(forKey: "Remove existing.pdf") }
         if staged && scenario == "attachment_before" { attachments.removeValue(forKey: "Remove existing.pdf") }
         if afterPaste && scenario == "two_images" { attachments["Remove image.png"] = 2 }
@@ -78,7 +79,7 @@ final class FakeAdapter: DeliveryAdapter {
             attachments: attachments)
     }
     func prepare() throws { if scenario == "unreadable" { throw TestFailure.expected } }
-    func stage(_ png: Data) throws {
+    func stage(_ image: OriginalImage) throws {
         staged = true
         if scenario == "stage_error" { throw TestFailure.expected }
         if scenario == "clipboard_before" { clipboardOwned = false }
@@ -106,6 +107,24 @@ final class FakeAdapter: DeliveryAdapter {
             guard condition else { fputs("FAIL: \(name)\n", stderr); throw TestFailure.expected }
             checks += 1
         }
+        let fixtureImage = OriginalImage(data: Data([1]), fileURL: URL(fileURLWithPath: "/fixture/image.png"), type: .png)
+        try check(ImageLimits.maxBytes == 50 * 1024 * 1024, "original encoded input accepts up to exactly 50 MiB")
+        try check(ImageLimits.maxBatchBytes == 100 * 1024 * 1024 && ImageLimits.maxBatchCount == 10,
+                  "batch byte and count limits remain 100 MiB and ten")
+        for suffix in OriginalImageType.supportedExtensions {
+            let originalAdapter = FakeAdapter(); originalAdapter.attachmentExtension = suffix
+            let receipt = DeliveryEngine.run(image: fixtureImage, adapter: originalAdapter)
+            try check(receipt.status == "verified" && originalAdapter.pastes == 1,
+                      "supported original file attachment is acknowledged: \(suffix)")
+        }
+        for suffix in ["heic", "heif"] {
+            let unsupportedAdapter = FakeAdapter(); unsupportedAdapter.attachmentExtension = suffix
+            try check(DeliveryEngine.run(image: fixtureImage, adapter: unsupportedAdapter).status == "uncertain",
+                      "a generic HEIC or HEIF attachment cannot acknowledge an image")
+        }
+        let unrelatedAdapter = FakeAdapter(); unrelatedAdapter.attachmentExtension = "txt"
+        try check(DeliveryEngine.run(image: fixtureImage, adapter: unrelatedAdapter).status == "uncertain",
+                  "an unrelated added attachment cannot acknowledge an image")
         try check(MacSessionLockState.parse(true) == .locked, "true session lock flag yields explicit locked refusal")
         try check(MacSessionLockState.parse(false) == .unlocked, "false session lock flag is recognized without bypassing composer policy")
         for value: Any? in [nil, "true", "false", 1, 0, NSNumber(value: 1), NSNull(), ["locked": true]] {
@@ -113,7 +132,7 @@ final class FakeAdapter: DeliveryAdapter {
         }
         for phase in ["preflight", "staged", "after_paste"] {
             let lockedAdapter = FakeAdapter(); lockedAdapter.scenario = "screen_locked_" + phase
-            let locked = DeliveryEngine.run(image: Data([1]), adapter: lockedAdapter)
+            let locked = DeliveryEngine.run(image: fixtureImage, adapter: lockedAdapter)
             try check(locked.reason == "mac_screen_locked" && locked.status == (phase == "after_paste" ? "uncertain" : "blocked"),
                       "screen lock keeps the correct before/after-Paste outcome")
             try check(lockedAdapter.pastes == (phase == "after_paste" ? 1 : 0), "screen lock never retries or pastes after a preflight refusal")
@@ -202,7 +221,7 @@ final class FakeAdapter: DeliveryAdapter {
             let adapter = FakeAdapter(); adapter.scenario = scenario
             if scenario == "existing_png" { adapter.existing["Remove image.png"] = 1 }
             var journalCount = 0
-            let result = DeliveryEngine.run(image: Data([1]), adapter: adapter, timeout: 5) {
+            let result = DeliveryEngine.run(image: fixtureImage, adapter: adapter, timeout: 5) {
                 journalCount += 1
                 if scenario == "journal_target" { adapter.scenario = "target_before" }
                 if scenario == "journal_clipboard" { adapter.clipboardOwned = false }
@@ -217,11 +236,11 @@ final class FakeAdapter: DeliveryAdapter {
             if scenario == "clipboard_after" { try check(result.clipboardRestoration == "newer_preserved", "newer clipboard retained") }
         }
         let adapter = FakeAdapter()
-        let result = DeliveryEngine.run(image: Data([1]), adapter: adapter) { throw TestFailure.expected }
+        let result = DeliveryEngine.run(image: fixtureImage, adapter: adapter) { throw TestFailure.expected }
         try check(adapter.pastes == 0 && result.status == "blocked", "journal failure prevents Paste")
         let diagnosticAdapter = FakeAdapter(); diagnosticAdapter.scenario = "draft_after"
         diagnosticAdapter.originalDraft = "PRIVATE-DRAFT-SENTINEL-DO-NOT-LOG"
-        let diagnostic = DeliveryEngine.run(image: Data([1]), adapter: diagnosticAdapter)
+        let diagnostic = DeliveryEngine.run(image: fixtureImage, adapter: diagnosticAdapter)
         try check(diagnostic.status == "uncertain" && diagnosticAdapter.pastes == 1, "draft diagnostics never retry or verify a changed draft")
         try check(diagnostic.diagnostics?["draftBeforeBytes"] != nil, "draft failure includes bounded structural metadata")
         let diagnosticJSON = String(decoding: try JSONEncoder().encode(diagnostic), as: UTF8.self)
@@ -247,21 +266,21 @@ final class FakeAdapter: DeliveryAdapter {
         try check(ComposerDraft.capture(raw: "Work with Codex\n", nodes: invalidTree) == Data("Work with Codex\n".utf8), "incomplete AX graph preserves raw text")
         for scenario in ["empty_placeholder_after", "typed_placeholder_after"] {
             let placeholderAdapter = FakeAdapter(); placeholderAdapter.scenario = scenario
-            let outcome = DeliveryEngine.run(image: Data([1]), adapter: placeholderAdapter)
+            let outcome = DeliveryEngine.run(image: fixtureImage, adapter: placeholderAdapter)
             try check(outcome.status == (scenario == "empty_placeholder_after" ? "verified" : "uncertain"), "\(scenario): structural distinction controls draft verification")
             try check(placeholderAdapter.pastes == 1 && placeholderAdapter.restores == 1, "\(scenario): one Paste and clipboard cleanup")
         }
         for count in [2, 10] {
             let batchAdapter = BatchFakeAdapter()
             var intents: [Int] = []
-            let batch = DeliveryEngine.runBatch(images: Array(repeating: Data([1]), count: count), adapter: batchAdapter) { intents.append($0) }
+            let batch = DeliveryEngine.runBatch(images: Array(repeating: fixtureImage, count: count), adapter: batchAdapter) { intents.append($0) }
             try check(batch.status == "verified" && batch.verifiedCount == count && batch.totalCount == count, "\(count) images verified as one batch")
             try check(batchAdapter.pastes == count && batchAdapter.restores == count && intents == Array(0..<count), "\(count) images each pasted once with durable ordered intent")
             try check(batchAdapter.attached["Remove image.png"] == 2 + count && batchAdapter.attached["Remove existing.pdf"] == 1, "duplicate image names and existing attachments preserved")
         }
         for scenario in ["target_between", "draft_between", "previous_image_lost", "uncertain_second", "clipboard_second", "cancel_second", "screen_locked_between"] {
             let batchAdapter = BatchFakeAdapter(); batchAdapter.scenario = scenario
-            let batch = DeliveryEngine.runBatch(images: Array(repeating: Data([1]), count: 3), adapter: batchAdapter)
+            let batch = DeliveryEngine.runBatch(images: Array(repeating: fixtureImage, count: 3), adapter: batchAdapter)
             let expectedPastes = ["uncertain_second", "clipboard_second"].contains(scenario) ? 2 : 1
             try check(batch.status == "uncertain" && batch.verifiedCount == 1, "\(scenario): partial batch never reported verified")
             try check(batchAdapter.pastes == expectedPastes, "\(scenario): no later Paste or retry after failure")
@@ -271,17 +290,17 @@ final class FakeAdapter: DeliveryAdapter {
         let emptyBatch = DeliveryEngine.runBatch(images: [], adapter: emptyBatchAdapter)
         try check(emptyBatch.status == "blocked" && emptyBatchAdapter.pastes == 0, "empty batch cannot Paste")
         let journalBatchAdapter = BatchFakeAdapter()
-        let journalBatch = DeliveryEngine.runBatch(images: Array(repeating: Data([1]), count: 3), adapter: journalBatchAdapter) { index in
+        let journalBatch = DeliveryEngine.runBatch(images: Array(repeating: fixtureImage, count: 3), adapter: journalBatchAdapter) { index in
             if index == 1 { throw TestFailure.expected }
         }
         try check(journalBatch.status == "uncertain" && journalBatch.verifiedCount == 1 && journalBatchAdapter.pastes == 1,
                   "journal failure between images stops batch without another Paste")
         let oversizedBatchAdapter = BatchFakeAdapter()
-        let oversizedBatch = DeliveryEngine.runBatch(images: Array(repeating: Data(repeating: 0, count: 20 * 1024 * 1024), count: 6), adapter: oversizedBatchAdapter)
+        let oversizedBatch = DeliveryEngine.runBatch(images: Array(repeating: OriginalImage(data: Data(repeating: 0, count: 20 * 1024 * 1024), fileURL: fixtureImage.fileURL, type: .png), count: 6), adapter: oversizedBatchAdapter)
         try check(oversizedBatch.status == "blocked" && oversizedBatchAdapter.pastes == 0,
                   "100 MiB aggregate limit enforced before any Paste")
         let preflightAdapter = BatchFakeAdapter(); preflightAdapter.scenario = "preflight_diagnostics"
-        let preflight = DeliveryEngine.runBatch(images: [Data([1])], adapter: preflightAdapter)
+        let preflight = DeliveryEngine.runBatch(images: [fixtureImage], adapter: preflightAdapter)
         try check(preflight.status == "blocked" && preflightAdapter.pastes == 0 && preflightAdapter.restores == 0,
                   "preflight diagnostic failure cannot stage or Paste")
         try check(preflight.diagnostics?["draftSame"] == "false" && preflight.diagnostics?["windowObjectSame"] == "true",

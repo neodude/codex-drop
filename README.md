@@ -15,6 +15,8 @@ Codex Drop is an independent utility, not an official OpenAI product or an OpenA
 
 The phone stages the complete batch over paired HTTPS before attachment starts. The Mac attaches images in order and **never presses Send**. An interrupted or uncertain share is never retried automatically; inspect the draft before sharing again. A new share can proceed while an older blocked or uncertain result remains in history.
 
+Codex Drop copies the exact image-file bytes supplied by the sharing app: no conversion, resizing, recompression, rotation, color changes, or metadata stripping. Limits are **50 MiB per file, 100 MiB per batch, and 10 images**; there is no pixel quota. Only JPEG, PNG, GIF and WebP are accepted, matching Codex’s recognized image formats. HEIC/HEIF and other unsupported formats are refused before attachment, without conversion or a generic-file fallback. Source apps such as Photos may supply an edited/exported representation before Codex Drop receives it.
+
 No OpenAI API key, hosted server, or cloud relay is required. Codex itself may stage or upload attachments before you send the message. An unsent draft does not mean no cloud processing has occurred.
 
 ## Requirements
@@ -90,7 +92,7 @@ Runtime data lives in **`~/Library/Application Support/Codex Drop/`**, separatel
 
 Cleanup runs at startup and once a day while the receiver is running. Receiver-owned screenshot, result, manifest, and abandoned upload files become eligible for deletion **30 days from receipt**. Active deliveries are protected. Failed removals are retried at a later check. Compact receipts and hashes remain to prevent duplicate replay; credentials, queue history, and the append-only log are retained. This does not delete phone originals, copies held by Codex, or clipboard-manager history.
 
-Transfers stay on the local network. Bonjour discovery is not a trust decision: the saved certificate pin and bearer credential authenticate the paired receiver. See [architecture](docs/architecture.md) for the delivery guards and limits.
+Image transfers go directly to the paired Mac. Android’s Google QR-scanning dependency can download its scanner and send SDK performance/usage metrics to Google; see [complete behavior and privacy details](docs/behavior-and-privacy.md). Bonjour discovery is not a trust decision: the saved certificate pin and bearer credential authenticate the paired receiver. See [architecture](docs/architecture.md) for the delivery guards and limits.
 
 ## Updates and removal
 
@@ -109,7 +111,7 @@ To remove the Mac app, finish active delivery, turn off **Open at Login**, quit,
 | Accessibility denied | Grant permission to the current signed app/helper, then inspect the draft before trying a new share. Rebuild/signing changes can invalidate prior approval. |
 | No safe destination | Run Codex and select one intended conversation. Remove selected draft text; multiple possible composers or a changing window/thread can block delivery. |
 | Partial or uncertain result | Inspect the Mac draft and keep verified images. Untried images were not pasted. Do not blindly resend the whole batch. Receipt lookup checks an existing request; it does not retry. |
-| Image rejected | Use at most 10 images, 20 MiB per image, 12 million pixels per image, and 100 MiB per prepared batch. Crop oversized captures. |
+| Image rejected | Use at most 10 images, 50 MiB per file and 100 MiB per batch. There is no pixel quota or automatic shrinking. A format that Codex cannot accept is not converted. |
 | Startup/migration error | Stop old Terminal receivers and inspect the log for conflicting stores, paused state, port conflict, permissions, missing Python, or identity trouble. Another receiver is never killed or adopted. |
 | Android update signature mismatch | Use the original signing key and application ID. Uninstalling is not a routine update repair: it discards app data and pairing. |
 

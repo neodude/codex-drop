@@ -40,7 +40,7 @@ class DropRepository(private val context: Context, private val discovery: Receiv
     override val slot = TransferSlot()
     private val pairingStore = PairingStore(context)
     private val receipts = ReceiptStore(File(context.noBackupFilesDir, "receipts"))
-    private val images = ImagePreparer(context.contentResolver)
+    private val images = ImagePreparer(context.contentResolver, File(context.cacheDir, "image-preparation"))
     override suspend fun pairing() = pairingStore.load()
     override suspend fun remember(receipt: PendingReceipt) = receipts.save(receipt)
     override suspend fun receipt(id: String) = receipts.find(id)

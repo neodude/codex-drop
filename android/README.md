@@ -53,7 +53,7 @@ Pairing uses device-only AES-GCM Android Keystore storage. Pairing and receipts 
 
 ## Interrupted and partial shares
 
-Images are prepared/uploaded serially; attachment begins only after the full batch is staged. Limits are 10 images, 20 MiB per input/prepared PNG, 12 million pixels per image, and 100 MiB per batch. Cancel before commit prevents attachment. Close after commit stops waiting; the Mac may still finish attaching.
+Original files are copied/uploaded serially; attachment begins only after the full batch is staged. Limits are 10 images, 50 MiB per file and 100 MiB per batch, without a pixel quota. Codex Drop never decodes, converts, resizes, rotates, changes color profiles, or strips metadata. The sending app’s ContentProvider may supply an exported representation before Codex Drop receives it; the bytes it supplies are preserved exactly. Only JPEG, PNG, GIF and WebP are accepted. HEIC/HEIF and other unsupported formats are refused before attachment; they are never added as generic files. Original filenames are replaced with internal names. Unsupported formats fail rather than being converted. Cancel before commit prevents attachment. Close after commit stops waiting; the Mac may still finish attaching.
 
 Check the Mac draft after uncertainty. Do not blindly resend images already attached. **Check receipt** and **Check last share** look up an existing request and never replay it. Rotation preserves the in-flight ViewModel; process restoration shows review/receipt lookup rather than replaying a share. Concurrent shares are refused rather than queued; a fresh share remains possible after an old uncertain result.
 
@@ -77,3 +77,5 @@ python3 android/scripts/harden-emulator.py --serial emulator-5580
 Start a disposable emulator first and use its actual serial. Both Python runners reject physical devices. They use isolated receiver state and fake attachment delivery; they do not paste into Codex. The hardening runner supports `--groups`; API-specific permission cases are skipped where inapplicable. Logs, screenshots, and delivery audits are saved under ignored `.codex-artifacts/`.
 
 Historical API 30/37 emulator checks and API 36 physical shares passed on preceding builds, including real QR pairing, discovery, batches, background/unfocused Codex with a preserved draft, and screenshot-preview sharing. Those results do not validate this build's changed application identity. Fresh device checks are still needed. API 28–29 and 31–35 remain unrun; see [validation gaps](../docs/development.md#validation-and-known-gaps).
+
+Image transfers use paired local HTTPS. QR pairing uses Google Play services code scanning; its module may download before first use, and Google documents SDK performance/utilization metrics. See [behavior and privacy](../docs/behavior-and-privacy.md) for that dependency, metadata, clipboard use and storage.

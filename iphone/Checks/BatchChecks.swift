@@ -1,11 +1,15 @@
 import Foundation
 import ImageIO
+import CryptoKit
 import UniformTypeIdentifiers
+import zlib
 
 @MainActor final class BatchStub {
     var calls: [String] = []
+    var expectedHashes: [Int: String] = [:]
     var prepared: [Int] = []
     var failUpload: Int?
+    var uploadFailure: (Data, Int)?
     var cancelAfterUpload: Int?
     var prepareFailure: Int?
     var pendingPolls = 0
@@ -29,8 +33,24 @@ import UniformTypeIdentifiers
         }
         if let last = path.split(separator: "/").last, let index = Int(last) {
             precondition(prepared == Array(0...index), "Preparation must alternate with upload")
-            precondition(request.value(forHTTPHeaderField: "Content-Type") == "image/png")
-            if failUpload == index { return (Data(), 409) }
+            precondition(request.value(forHTTPHeaderField: "Content-Type") == "application/octet-stream")
+            precondition(request.timeoutInterval == 120)
+            precondition(request.httpBody == nil, "Uploads must not retain a Data request body")
+            let stream = request.httpBodyStream!
+            stream.open(); defer { stream.close() }
+            var bytes = [UInt8](repeating: 0, count: 64 * 1024)
+            var actual = 0
+            var hash = SHA256()
+            while true {
+                let read = stream.read(&bytes, maxLength: bytes.count)
+                precondition(read >= 0)
+                if read == 0 { break }; actual += read
+                hash.update(data: Data(bytes.prefix(read)))
+            }
+            precondition(actual == Int(request.value(forHTTPHeaderField: "Content-Length")!))
+            let digest = hash.finalize().map { String(format: "%02x", $0) }.joined()
+            if let expected = expectedHashes[index] { precondition(digest == expected, "Uploaded original bytes changed") }
+            if failUpload == index { return uploadFailure ?? (Data(), 409) }
             if cancelAfterUpload == index { withUnsafeCurrentTask { $0?.cancel() } }
         }
         let state = path.hasSuffix("commit") || path.contains("/jobs/") ? (timeout || pendingPolls > 0 ? "queued" : terminal) : "uploading"
@@ -48,6 +68,21 @@ import UniformTypeIdentifiers
 
 @main struct BatchChecks {
     @MainActor static func main() async throws {
+        if CommandLine.arguments.count == 3, CommandLine.arguments[1] == "--write-large-png-fixture" {
+            try writeLargePNG(to: URL(fileURLWithPath: CommandLine.arguments[2]), size: ImageInput.maximumBytes); return
+        }
+        if CommandLine.arguments.count == 3, CommandLine.arguments[1] == "--write-normal-fixture" {
+            try fixture(type: .jpeg, width: 3024, height: 4032).write(to: URL(fileURLWithPath: CommandLine.arguments[2])); return
+        }
+        if CommandLine.arguments.count == 3, ["--copy-file", "--prepare-file"].contains(CommandLine.arguments[1]) {
+            let source = URL(fileURLWithPath: CommandLine.arguments[2])
+            let input = try ImageFile.copy(from: source)
+            let output = try await ImageInput.originalFile(input)
+            let sourceHash = try fileHash(source), outputHash = try fileHash(output.url)
+            precondition(output === input && sourceHash == outputHash)
+            print("PASS: byte-identical original file copy, \(output.byteCount) bytes; no image decoding.")
+            return
+        }
         let pairing = Pairing(v: 1, service: "unused", pin: String(repeating: "a", count: 64), token: String(repeating: "b", count: 32))
         var checks = 0
         func run(_ stub: BatchStub, size: Int = 3, timeout: Duration = .seconds(120)) async throws -> DeliveryJob {
@@ -86,13 +121,30 @@ import UniformTypeIdentifiers
         let failed = BatchStub(); failed.failUpload = 1
         do { _ = try await run(failed); fatalError("Upload failure accepted") } catch { precondition(!failed.calls.contains { $0.hasSuffix("commit") }) }
         checks += 1
+        let unsupportedMessage = "Codex does not accept HEIC/HEIF as image inputs. Share a JPEG, PNG, GIF or WebP instead. In Photos, use Automatic or Most Compatible."
+        for message in [unsupportedMessage, ""] {
+            let unsupported = BatchStub(); unsupported.failUpload = 0
+            unsupported.uploadFailure = (try JSONSerialization.data(withJSONObject: ["error": "unsupported_image_format", "message": message]), 400)
+            do { _ = try await run(unsupported); fatalError("Unsupported image format accepted") }
+            catch {
+                precondition(error is ReceiverError)
+                if !message.isEmpty { precondition(error.localizedDescription == message) }
+                else { precondition(error.localizedDescription.contains("JPEG, PNG, GIF, or WebP")); precondition(error.localizedDescription.contains("Automatic or Most Compatible")) }
+                precondition(unsupported.calls == ["/v1/batches", "/v1/batches/\(unsupported.id)/images/0"])
+                precondition(unsupported.prepared == [0], "Format refusal must stop before the next file and commit")
+            }
+            checks += 1
+        }
         let oversize = BatchStub()
-        do { _ = try await run(oversize, size: 20 * 1024 * 1024 + 1); fatalError("Oversize accepted") }
+        do { _ = try await run(oversize, size: 50 * 1024 * 1024 + 1); fatalError("Oversize accepted") }
         catch { precondition(oversize.calls == ["/v1/batches"]) }
         checks += 1
-        let total = BatchStub(); total.count = 6
-        do { _ = try await run(total, size: 20 * 1024 * 1024); fatalError("Batch oversize accepted") }
-        catch { precondition(total.calls.count == 6); precondition(!total.calls.contains { $0.hasSuffix("commit") }) }
+        let accepted = BatchStub(); accepted.count = 1
+        let acceptedJob = try await run(accepted, size: 50 * 1024 * 1024)
+        precondition(acceptedJob.allVerified(count: 1)); checks += 1
+        let total = BatchStub(); total.count = 3
+        do { _ = try await run(total, size: 50 * 1024 * 1024); fatalError("Batch oversize accepted") }
+        catch { precondition(total.calls.count == 3); precondition(!total.calls.contains { $0.hasSuffix("commit") }) }
         checks += 1
         let cancel = BatchStub(); cancel.cancelAfterUpload = 1
         let task = Task { try await run(cancel) }
@@ -135,26 +187,125 @@ import UniformTypeIdentifiers
         do { _ = try await run(timed, timeout: .zero); fatalError("Pending accepted") }
         catch { precondition(timed.calls.filter { $0.hasSuffix("commit") }.count == 1) }
         checks += 1
-        let pixel = makePNG(width: 1, height: 1)
-        let preserved = try await ImageEncoder.png(pixel)
-        precondition(preserved == pixel)
-        checks += 1
-        do { _ = try await ImageEncoder.png(Data()); fatalError("Empty image accepted") } catch { checks += 1 }
-        do { _ = try await ImageEncoder.png(Data(repeating: 0, count: 20 * 1024 * 1024 + 1)); fatalError("Large input accepted") } catch { checks += 1 }
-        let tooManyPixels = makePNG(width: 4000, height: 3001)
-        do { _ = try await ImageEncoder.png(tooManyPixels); fatalError("Over 12 MP accepted") } catch { checks += 1 }
-        print("PASS: \(checks) Swift batch sequencing, bounds, cancellation, partial-result, timeout and image-encoder checks; no network, Codex or clipboard access.")
+        checks += try await imageChecks(pairing: pairing)
+        var files: [URL] = []
+        let fileStub = BatchStub(); fileStub.count = 1
+        let fileClient = ReceiverClient(pairing: pairing, baseURL: URL(string: "https://test.invalid")!, transport: fileStub.send)
+        defer { fileClient.close() }
+        _ = try await fileClient.attachBatch(count: 1, id: fileStub.id, prepareFile: { index in
+            fileStub.prepared.append(index)
+            let file = try ImageFile.stage(Data([1, 2, 3]))
+            files.append(file.url)
+            return file
+        })
+        precondition(files.allSatisfy { !FileManager.default.fileExists(atPath: $0.path) }); checks += 1
+        let cancelledFile = BatchStub(); cancelledFile.count = 1; cancelledFile.cancelAfterUpload = 0
+        let cancelledClient = ReceiverClient(pairing: pairing, baseURL: URL(string: "https://test.invalid")!, transport: cancelledFile.send)
+        defer { cancelledClient.close() }
+        let cancelledTask = Task {
+            try await cancelledClient.attachBatch(count: 1, id: cancelledFile.id, prepareFile: { index in
+                cancelledFile.prepared.append(index)
+                let file = try ImageFile.stage(Data([1, 2, 3])); files.append(file.url); return file
+            })
+        }
+        do { _ = try await cancelledTask.value; fatalError("Cancelled file upload committed") } catch { }
+        precondition(files.allSatisfy { !FileManager.default.fileExists(atPath: $0.path) })
+        precondition(!cancelledFile.calls.contains { $0.hasSuffix("commit") }); checks += 1
+        print("PASS: \(checks) Swift batch sequencing, bounds, cancellation, partial-result, timeout and original-file byte-preservation checks; no network, Codex or clipboard access.")
     }
-    static func makePNG(width: Int, height: Int) -> Data {
-        let bytes = Data(repeating: 0, count: width * height * 4)
-        let image = CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: width * 4,
-                            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
-                            provider: CGDataProvider(data: bytes as CFData)!, decode: nil, shouldInterpolate: false, intent: .defaultIntent)!
+    // Test-only ImageIO fixture generation. The production file path imports no ImageIO.
+    static func fixture(type: UTType, width: Int = 64, height: Int = 32) -> Data {
+        let bitmap = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+                               space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
+        bitmap.setFillColor(CGColor(red: 0.2, green: 0.4, blue: 0.6, alpha: 1))
+        bitmap.fill(CGRect(x: 0, y: 0, width: width, height: height))
         let output = NSMutableData()
-        let destination = CGImageDestinationCreateWithData(output, UTType.png.identifier as CFString, 1, nil)!
-        CGImageDestinationAddImage(destination, image, nil)
-        precondition(CGImageDestinationFinalize(destination))
-        return output as Data
+        let destination = CGImageDestinationCreateWithData(output, type.identifier as CFString, 1, nil)!
+        let metadata: [CFString: Any] = [kCGImagePropertyOrientation: 6,
+            kCGImagePropertyExifDictionary: [kCGImagePropertyExifUserComment: "Synthetic byte-preservation fixture"],
+            kCGImagePropertyTIFFDictionary: [kCGImagePropertyTIFFImageDescription: "Preserve this metadata"]]
+        CGImageDestinationAddImage(destination, bitmap.makeImage()!, metadata as CFDictionary)
+        precondition(CGImageDestinationFinalize(destination)); return output as Data
     }
-
+    static func fileHash(_ url: URL) throws -> String {
+        let file = try FileHandle(forReadingFrom: url); defer { try? file.close() }
+        var digest = SHA256()
+        while true {
+            let read = try autoreleasepool {
+                guard let chunk = try file.read(upToCount: 64 * 1024), !chunk.isEmpty else { return false }
+                digest.update(data: chunk); return true
+            }
+            if !read { break }
+        }
+        return digest.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+    // A valid private ancillary chunk makes a large PNG without a large bitmap.
+    static func writeLargePNG(to url: URL, size: Int) throws {
+        let png = fixture(type: .png, width: 1, height: 1)
+        let length = size - png.count - 12
+        precondition(length > 0)
+        try Data(png.dropLast(12)).write(to: url)
+        let file = try FileHandle(forWritingTo: url); defer { try? file.close() }
+        try file.seekToEnd()
+        try file.write(contentsOf: withUnsafeBytes(of: UInt32(length).bigEndian) { Data($0) })
+        let type = Data("npAD".utf8)
+        try file.write(contentsOf: type)
+        var crc = type.withUnsafeBytes { crc32(0, $0.bindMemory(to: Bytef.self).baseAddress, uInt(type.count)) }
+        let zeroes = Data(repeating: 0, count: 64 * 1024)
+        var remaining = length
+        while remaining > 0 {
+            let chunk = zeroes.prefix(min(remaining, zeroes.count))
+            try file.write(contentsOf: chunk)
+            crc = chunk.withUnsafeBytes { crc32(crc, $0.bindMemory(to: Bytef.self).baseAddress, uInt(chunk.count)) }
+            remaining -= chunk.count
+        }
+        try file.write(contentsOf: withUnsafeBytes(of: UInt32(crc).bigEndian) { Data($0) })
+        try file.write(contentsOf: png.suffix(12))
+    }
+    @MainActor static func imageChecks(pairing: Pairing) async throws -> Int {
+        var checks = 0
+        let webp = Data(base64Encoded: "UklGRiIAAABXRUJQVlA4IBYAAAAwAQCdASoBAAEAAUAmJaQAA3AA/v89WAAAAA==")!
+        let fixtures = [("PNG", fixture(type: .png)), ("JPEG", fixture(type: .jpeg)),
+                        ("HEIC", fixture(type: .heic)), ("GIF", fixture(type: .gif)), ("WebP", webp),
+                        ("3024x4032 JPEG", fixture(type: .jpeg, width: 3024, height: 4032)),
+                        ("opaque receiver-validated bytes", Data("not decoded on the phone".utf8))]
+        for (name, bytes) in fixtures {
+            let providerFile = ImageFile.temporaryURL()
+            try bytes.write(to: providerFile)
+            let sourceHash = try fileHash(providerFile)
+            let copied = try ImageFile.copy(from: providerFile)
+            try FileManager.default.removeItem(at: providerFile)
+            let original = try await ImageInput.originalFile(copied)
+            precondition(original === copied && original.byteCount == bytes.count, name)
+            let copiedHash = try fileHash(original.url)
+            precondition(sourceHash == copiedHash, "File copy changed " + name)
+            let stub = BatchStub(); stub.count = 1; stub.expectedHashes[0] = sourceHash
+            let client = ReceiverClient(pairing: pairing, baseURL: URL(string: "https://test.invalid")!, transport: stub.send)
+            defer { client.close() }
+            _ = try await client.attachBatch(count: 1, id: stub.id, prepareFile: { index in stub.prepared.append(index); return original })
+            checks += 1
+        }
+        precondition(ImageInput.originalTypeIdentifier(in: [UTType.image.identifier, UTType.heic.identifier, UTType.jpeg.identifier]) == UTType.heic.identifier)
+        precondition(ImageInput.originalTypeIdentifier(in: [UTType.jpeg.identifier, UTType.png.identifier]) == UTType.jpeg.identifier)
+        precondition(ImageInput.originalTypeIdentifier(in: [UTType.image.identifier, "com.apple.uikit.image"]) == nil)
+        checks += 3
+        do { _ = try ImageFile.stage(Data()); fatalError("Empty file accepted") } catch { checks += 1 }
+        do { _ = try ImageFile.stage(Data(repeating: 1, count: ImageInput.maximumBytes + 1)); fatalError("Over50 MiB accepted") }
+        catch { precondition(error.localizedDescription.contains("50 MiB")); checks += 1 }
+        let paddedURL = ImageFile.temporaryURL()
+        defer { try? FileManager.default.removeItem(at: paddedURL) }
+        try writeLargePNG(to: paddedURL, size: 21 * 1024 * 1024)
+        let padded = try ImageFile.copy(from: paddedURL)
+        let unchanged = try await ImageInput.originalFile(padded)
+        let beforeHash = try fileHash(paddedURL), afterHash = try fileHash(unchanged.url)
+        precondition(beforeHash == afterHash); checks += 1
+        let before = Set(try FileManager.default.contentsOfDirectory(atPath: FileManager.default.temporaryDirectory.path).filter { $0.hasPrefix("codex-drop-image-") })
+        do { _ = try ImageFile.copy(from: paddedURL, cancelled: { true }); fatalError("Cancelled copy accepted") }
+        catch is CancellationError { checks += 1 }
+        let after = Set(try FileManager.default.contentsOfDirectory(atPath: FileManager.default.temporaryDirectory.path).filter { $0.hasPrefix("codex-drop-image-") })
+        precondition(before == after)
+        let cancelled = Task { withUnsafeCurrentTask { $0?.cancel() }; return try await ImageInput.originalFile(padded) }
+        do { _ = try await cancelled.value; fatalError("Cancelled original preparation accepted") } catch is CancellationError { checks += 1 }
+        return checks
+    }
 }

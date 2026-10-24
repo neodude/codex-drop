@@ -107,14 +107,17 @@ final class FixtureDelegate: NSObject, NSApplicationDelegate {
         if mode == "no-ack" || mode == "clipboard-change" || mode == "window-change" || (mode == "batch-uncertain" && pasteCount == 2) { writeReport(); return }
         let delay: TimeInterval = mode == "delayed" ? 3.5 : 0
         let attach: () -> Void = { [weak self] in
-            guard let self, let data = self.board.data(forType: .png), let image = NSImage(data: data) else { return }
-            let preview = NSImageView(); preview.image = image
+            guard let self, let value = self.board.string(forType: .fileURL),
+                  let url = URL(string: value), url.isFileURL,
+                  let data = try? Data(contentsOf: url), !data.isEmpty else { return }
+            let preview = NSImageView(); preview.image = NSImage(named: NSImage.multipleDocumentsName)
             preview.translatesAutoresizingMaskIntoConstraints = false
             preview.heightAnchor.constraint(equalToConstant: 70).isActive = true
             preview.widthAnchor.constraint(equalToConstant: 140).isActive = true
             self.stack.addArrangedSubview(preview)
-            let remove = NSButton(title: "Remove image.png", target: nil, action: nil)
-            remove.setAccessibilityLabel("Remove image.png"); self.stack.addArrangedSubview(remove)
+            let label = "Remove " + url.lastPathComponent
+            let remove = NSButton(title: label, target: nil, action: nil)
+            remove.setAccessibilityLabel(label); self.stack.addArrangedSubview(remove)
             self.attachmentCount += 1
             self.writeReport()
         }

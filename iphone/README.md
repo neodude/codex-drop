@@ -29,13 +29,17 @@ The extension prepares/uploads images in selection order before committing the c
 
 ## Limits and privacy
 
-- At most 10 images, 20 MiB per input/prepared PNG, 12 million pixels per image, and 100 MiB of prepared PNGs per batch.
-- PNG input remains byte-identical; other supported images convert to PNG. The phone does not persist image bytes.
+- At most 10 images, 50 MiB per original file and 100 MiB per batch. No pixel quota.
+- The concrete file representation supplied by the sharing app is copied and uploaded unchanged. Codex Drop never decodes, converts, resizes, rotates, recolors, or strips metadata. Photos may supply an edited/exported representation; Codex Drop cannot reconstruct the underlying camera asset. If only a rendered image object is supplied, sharing fails instead of re-encoding it.
+- App-private temporary file copies support bounded-memory uploads and are removed after normal completion, errors or cancellation. A killed process can leave temporary files for OS cleanup.
+- Only JPEG, PNG, GIF and WebP are accepted as image inputs. HEIC/HEIF and other unsupported formats are refused before attachment; they are never attached as generic files or converted. Original filenames are replaced with internal names, but file bytes and embedded metadata remain unchanged.
 - Pairing uses `WhenUnlockedThisDeviceOnly` shared Keychain storage. HTTPS sessions pin the paired leaf certificate and refuse redirects. Bonjour discovers the receiver; it does not establish trust.
 - Transfers use local Wi-Fi without a relay or OpenAI API key. Codex may stage/upload attachments before Send.
 - Mac runtime files live in `~/Library/Application Support/Codex Drop/`. Receiver image artifacts become eligible for cleanup 30 days from receipt; credentials, receipts, hashes, and logs remain. Phone originals and Codex copies are unaffected. See [storage details](../README.md#storage-and-privacy).
 
 An upload receipt alone is not attachment verification. Confirmation is polled for up to 120 seconds; interruption or timeout requires Mac review. Do not resend verified images blindly.
+
+Photos may export an HEIC asset as JPEG under Automatic. To choose a compatible export, use Photos → Share → Options → Automatic or Most Compatible. Current prevents format conversion and can supply HEIC, which Codex Drop will refuse. Codex Drop does not alter Photos settings or perform that conversion. See [Apple’s sharing guide](https://support.apple.com/guide/iphone/share-photos-and-videos-iphf28f17237/ios).
 
 ## Update, unpair, and remove
 
@@ -51,4 +55,4 @@ If sharing fails, check Local Network permission, the Mac's lock/sleep state, Ac
 
 The simulator-only **CodexSharePreview** scheme renders the same share status view without pairing, receiver access, shared images, or clipboard use. Build for a simulator with `CODE_SIGNING_ALLOWED=NO`. Launch with `--scenario uploading`, `finding`, `confirming`, `unpaired`, `blocked`, or `uncertain`; add `--compact --large-text` for a compact accessibility preview. This fixture is not embedded in the shipping app.
 
-Historical physical shares passed on earlier builds. The current identity/configuration and storage changes still require fresh real-device sharing; see [validation gaps](../docs/development.md#validation-and-known-gaps).
+Build 11 passed a physical Photos share with original-file receiver/Codex-staging hash agreement and user-confirmed success; preservation is measured from the representation supplied by Photos, not the library asset. Broader format/batch coverage remains separate; see [validation gaps](../docs/development.md#validation-and-known-gaps).

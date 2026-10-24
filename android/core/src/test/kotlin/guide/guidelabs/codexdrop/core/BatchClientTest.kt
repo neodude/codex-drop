@@ -33,6 +33,64 @@ private class RecordingTransport(var terminal: String = "verified") : Transport 
     }
 }
 class BatchClientTest {
+    @Test fun originalBytesAreUploadedUnchangedWithoutLocalFormatOrPixelChanges() = runBlocking {
+        val originals = listOf(
+            png(3024, 4032), png(40_000, 40_000),
+            byteArrayOf(-1,-40,-1,-31) + "Exif orientation=6 ICC original metadata".toByteArray(),
+            "GIF89a original animated frames".toByteArray(),
+            "RIFF original WEBP metadata".toByteArray(),
+            "\u0000\u0000\u0000\u0018ftypheic original HEIC bytes".toByteArray(),
+        )
+        val transport = RecordingTransport()
+        assertTrue(BatchClient(transport).attach(originals.size, TEST_ID, prepare = { originals[it] }).allVerified(originals.size))
+        val uploads = transport.requests.filter { "/images/" in it.path }
+        assertEquals(originals.size, uploads.size)
+        originals.forEachIndexed { index, bytes ->
+            assertArrayEquals(bytes, uploads[index].body)
+            assertEquals("application/octet-stream", uploads[index].contentType)
+        }
+    }
+    @Test fun unsupportedHeicReplyIsExplainedWithoutRetryOrCommit() {
+        val message = "Codex does not accept HEIC/HEIF as image inputs. Share a JPEG, PNG, GIF or WebP instead. In Photos, use Automatic or Most Compatible."
+        val requests = mutableListOf<HttpRequest>()
+        var persisted = false
+        var prepared = 0
+        val transport = Transport { request ->
+            requests += request
+            if (request.path.endsWith("/images/1")) HttpReply(400, """{"error":"unsupported_image_format","message":"$message"}""".toByteArray())
+            else HttpReply(202, """{"received":true,"job":${jobJson(count = 3)}}""".toByteArray())
+        }
+        val failure = assertThrows(DropFailure::class.java) { runBlocking {
+            BatchClient(transport).attach(3, TEST_ID, prepare = { prepared++;png() }, beforeCommit = { persisted = true })
+        } }
+        assertEquals(message, failure.message)
+        assertFalse(failure.mayBeAttached)
+        assertEquals(2, prepared)
+        assertEquals(2, requests.count { "/images/" in it.path })
+        assertEquals(1, requests.count { it.path.endsWith("/images/1") })
+        assertFalse(persisted)
+        assertFalse(requests.any { it.path.endsWith("/commit") })
+    }
+    @Test fun unsupportedFormatFallbackIsClearWhileUnrecognizedErrorsStayGeneric() {
+        val cases = listOf(
+            """{"error":"unsupported_image_format","message":"   "}""" to "Codex accepts JPEG, PNG, GIF and WebP image inputs. Share one of those formats instead.",
+            """{"error":"unsupported_image_format","message":"line\nbreak"}""" to "Codex accepts JPEG, PNG, GIF and WebP image inputs. Share one of those formats instead.",
+            """{"error":"unsupported_image_format","message":"${"x".repeat(513)}"}""" to "Codex accepts JPEG, PNG, GIF and WebP image inputs. Share one of those formats instead.",
+            """{"error":"unsupported_image_format"}""" to "Codex accepts JPEG, PNG, GIF and WebP image inputs. Share one of those formats instead.",
+            """{"error":"unsupported_image_format","message":9}""" to "Codex accepts JPEG, PNG, GIF and WebP image inputs. Share one of those formats instead.",
+            """{"error":"unknown","message":"arbitrary server copy"}""" to "The Mac refused the request. Check the receiver before sharing again. No automatic retry.",
+            "not JSON" to "The Mac refused the request. Check the receiver before sharing again. No automatic retry.",
+        )
+        for ((body, expected) in cases) {
+            val transport = Transport { request ->
+                if ("/images/" in request.path) HttpReply(400, body.toByteArray())
+                else HttpReply(202, """{"received":true,"job":${jobJson(count = 1)}}""".toByteArray())
+            }
+            val failure = assertThrows(DropFailure::class.java) { runBlocking { BatchClient(transport).attach(1, TEST_ID, prepare = { png() }) } }
+            assertEquals(expected, failure.message)
+            assertFalse(failure.mayBeAttached)
+        }
+    }
     @Test fun uploadsInOrderThenCommitsOnceAfterDurableReceipt() = runBlocking {
         val transport = RecordingTransport()
         var persisted = false
@@ -45,7 +103,7 @@ class BatchClientTest {
         assertTrue(result.allVerified(2))
         assertEquals(listOf("v1/batches", "v1/batches/$TEST_ID/images/0", "v1/batches/$TEST_ID/images/1", "v1/batches/$TEST_ID/commit"), transport.requests.map { it.path })
         assertEquals(TEST_ID, transport.requests.first().requestId)
-        assertEquals("image/png", transport.requests[1].contentType)
+        assertEquals("application/octet-stream", transport.requests[1].contentType)
     }
     @Test fun cancelledPreparationNeverCommits() {
         val transport = RecordingTransport()
@@ -67,7 +125,7 @@ class BatchClientTest {
             assertThrows(DropFailure::class.java) { runBlocking { BatchClient(transport).attach(count, TEST_ID, prepare = { png() }) } }
             assertTrue(transport.requests.isEmpty())
         }
-        for (bytes in listOf(ByteArray(0), png(12_000_001, 1), png(size = 20 * 1024 * 1024 + 1))) {
+        for (bytes in listOf(ByteArray(0), png(size = 50 * 1024 * 1024 + 1))) {
             val transport = RecordingTransport()
             assertThrows(DropFailure::class.java) { runBlocking { BatchClient(transport).attach(1, TEST_ID, prepare = { bytes }) } }
             assertFalse(transport.requests.any { "/images/" in it.path || it.path.endsWith("/commit") })
@@ -75,8 +133,8 @@ class BatchClientTest {
     }
     @Test fun totalByteLimitStopsBeforeTheExtraImageOrCommit() {
         val transport = RecordingTransport()
-        assertThrows(DropFailure::class.java) { runBlocking { BatchClient(transport).attach(6, TEST_ID, prepare = { png(size = 20 * 1024 * 1024) }) } }
-        assertEquals(5, transport.requests.count { "/images/" in it.path })
+        assertThrows(DropFailure::class.java) { runBlocking { BatchClient(transport).attach(3, TEST_ID, prepare = { png(size = 50 * 1024 * 1024) }) } }
+        assertEquals(2, transport.requests.count { "/images/" in it.path })
         assertFalse(transport.requests.any { it.path.endsWith("/commit") })
     }
     @Test fun confirmationTimeoutIsUncertainAndDoesNotResubmit() {

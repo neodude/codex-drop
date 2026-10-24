@@ -137,6 +137,43 @@ func axSelectionState(_ editor: AXUIElement) -> (empty: Bool, readable: Bool, le
 func axSelectionEmpty(_ editor: AXUIElement) -> Bool { axSelectionState(editor).empty }
 
 // All original clipboard representations stay in memory only.
+/// A private, independently named snapshot outlives clipboard restoration and
+/// process exit so asynchronous file-copy readers keep the exact eager bytes.
+/// Canonical UUID names are covered by the receiver's 30-day orphan retention.
+private func persistOriginalSnapshot(_ image: OriginalImage) throws -> URL {
+    let directory = image.fileURL.deletingLastPathComponent().resolvingSymlinksInPath()
+    let directoryFD = open(directory.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+    guard directoryFD >= 0 else { throw DeliveryRefusal(reason: "image_snapshot_directory_unavailable") }
+    defer { close(directoryFD) }
+    var directoryInfo = stat()
+    guard fstat(directoryFD, &directoryInfo) == 0, directoryInfo.st_mode & S_IFMT == S_IFDIR,
+          directoryInfo.st_uid == getuid() else { throw DeliveryRefusal(reason: "unsafe_image_snapshot_directory") }
+    let name = UUID().uuidString.lowercased() + "." + image.type.fileExtension
+    let url = directory.appendingPathComponent(name)
+    let descriptor = openat(directoryFD, name, O_RDWR | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
+    guard descriptor >= 0 else { throw DeliveryRefusal(reason: "image_snapshot_unavailable") }
+    let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+    defer { try? handle.close() }
+    do {
+        guard image.data.count <= ImageLimits.maxBytes else { throw DeliveryRefusal(reason: "image_size_limit") }
+        try handle.write(contentsOf: image.data)
+        try handle.synchronize()
+        try handle.seek(toOffset: 0)
+        let verified = try handle.read(upToCount: image.data.count + 1) ?? Data()
+        var info = stat(), named = stat()
+        guard verified.count == image.data.count, SHA256.hash(data: verified) == SHA256.hash(data: image.data),
+              fstat(descriptor, &info) == 0, lstat(url.path, &named) == 0,
+              named.st_mode & S_IFMT == S_IFREG, named.st_uid == getuid(), named.st_mode & 0o077 == 0,
+              named.st_ino == info.st_ino, named.st_dev == info.st_dev, fsync(directoryFD) == 0 else {
+            throw DeliveryRefusal(reason: "image_snapshot_checksum_changed")
+        }
+        return url
+    } catch {
+        unlinkat(directoryFD, name, 0)
+        throw error
+    }
+}
+
 final class ClipboardLease {
     let pasteboard: NSPasteboard
     let saved: [[NSPasteboard.PasteboardType: Data]]
@@ -162,11 +199,13 @@ final class ClipboardLease {
         }
         guard pasteboard.changeCount == initialCount else { throw DeliveryRefusal(reason: "clipboard_changed_during_snapshot") }
     }
-    func stage(_ data: Data) throws {
+    func stage(_ image: OriginalImage) throws {
+        let snapshot = try persistOriginalSnapshot(image)
         guard pasteboard.changeCount == initialCount else { throw DeliveryRefusal(reason: "clipboard_changed_before_stage") }
         let item = NSPasteboardItem()
-        // Eager bytes only. A lazy provider here can deadlock against synchronous AX Paste.
-        guard item.setData(data, forType: .png) else { throw DeliveryRefusal(reason: "clipboard_image_encoding_failed") }
+        // File-copy semantics only: raw bitmap types let Chromium transcode the image.
+        // This eager URL has no lazy provider and its private file is retained.
+        guard item.setString(snapshot.absoluteString, forType: .fileURL) else { throw DeliveryRefusal(reason: "clipboard_file_url_failed") }
         pasteboard.clearContents()
         ownedCount = pasteboard.changeCount
         guard pasteboard.writeObjects([item]) else { throw DeliveryRefusal(reason: "clipboard_stage_failed") }
@@ -559,9 +598,9 @@ final class MacDeliveryAdapter: DeliveryAdapter {
               (actions as? [String] ?? []).contains(kAXPressAction) else { throw DeliveryRefusal(reason: "paste_menu_unavailable") }
         pasteItem = matches[0]
     }
-    func stage(_ png: Data) throws {
+    func stage(_ image: OriginalImage) throws {
         lease = try ClipboardLease(fixturePasteboard.map { NSPasteboard(name: .init($0)) } ?? .general)
-        try lease?.stage(png)
+        try lease?.stage(image)
         if testStageHold > 0 {
             print("TEST WINDOW: image staged; holding \(Int(testStageHold)) seconds BEFORE Paste."); fflush(stdout)
             NSSound.beep()
@@ -676,6 +715,44 @@ func diagnoseClipboardFormats() throws {
     print(String(decoding: try JSONSerialization.data(withJSONObject: result, options: [.prettyPrinted, .sortedKeys]), as: UTF8.self))
 }
 
+func originalFileSelfTest(_ image: OriginalImage) throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent("Codex Original 🧗 " + UUID().uuidString)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let source = directory.appendingPathComponent("source with space 🧗." + image.type.fileExtension)
+    try image.data.write(to: source)
+    let eager = OriginalImage(data: image.data, fileURL: source, type: image.type)
+    // Eager bytes, rather than a later reread of the source, own delivery content.
+    try Data("source changed after validation".utf8).write(to: source)
+    let board = NSPasteboard(name: .init("com.example.CodexScreenshotReceiver.Test." + UUID().uuidString))
+    defer { board.releaseGlobally() }
+    board.clearContents(); board.setString("original fixture clipboard", forType: .string)
+    let lease = try ClipboardLease(board)
+    try lease.stage(eager)
+    let items = board.pasteboardItems ?? []
+    guard items.count == 1, Set(items[0].types) == [.fileURL],
+          let value = items[0].string(forType: .fileURL), let snapshot = URL(string: value), snapshot.isFileURL,
+          snapshot != source, snapshot.pathExtension == image.type.fileExtension else {
+        throw DeliveryRefusal(reason: "platform_test_original_file_types")
+    }
+    let child = Process(), output = Pipe()
+    child.executableURL = URL(fileURLWithPath: CommandLine.arguments[0])
+    child.arguments = ["--read-fixture-pasteboard", board.name.rawValue]
+    child.standardOutput = output; child.standardError = FileHandle.nullDevice
+    try child.run()
+    let deadline = Date().addingTimeInterval(5)
+    while child.isRunning && Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.02)) }
+    if child.isRunning { child.terminate(); child.waitUntilExit() }
+    let received = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+    let expected = SHA256.hash(data: image.data).map { String(format: "%02x", $0) }.joined()
+    guard child.terminationStatus == 0, received == expected, lease.restore() == "restored",
+          board.string(forType: .string) == "original fixture clipboard",
+          try Data(contentsOf: snapshot) == image.data else {
+        throw DeliveryRefusal(reason: "platform_test_original_file_bytes_or_lifetime")
+    }
+    print("Original file private-pasteboard round trip passed: \(image.type.fileExtension), exact SHA256, file-url only, retained after restore")
+}
+
 func platformSelfTest() throws {
     var checks = 0
     func check(_ condition: Bool, _ name: String) throws {
@@ -688,8 +765,13 @@ func platformSelfTest() throws {
     original.setData(Data([0, 255, 1]), forType: .init("com.example.receiver-test"))
     pb.clearContents(); try check(pb.writeObjects([original]), "fixture")
     let png = try Data(contentsOf: URL(fileURLWithPath: CommandLine.arguments[0]).deletingLastPathComponent().appendingPathComponent("test-image.png"))
+    let selfTestDirectory = FileManager.default.temporaryDirectory.appendingPathComponent("Codex Original 🧗 " + UUID().uuidString)
+    try FileManager.default.createDirectory(at: selfTestDirectory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+    defer { try? FileManager.default.removeItem(at: selfTestDirectory) }
+    let selfTestSource = selfTestDirectory.appendingPathComponent("source.png")
     let lease = try ClipboardLease(pb)
-    try lease.stage(png)
+    let originalImage = OriginalImage(data: png, fileURL: selfTestSource, type: .png)
+    try lease.stage(originalImage)
     try check(lease.owned, "ownership_after_eager_stage")
     let child = Process()
     child.executableURL = URL(fileURLWithPath: CommandLine.arguments[0])
@@ -701,17 +783,17 @@ func platformSelfTest() throws {
     if child.isRunning { child.terminate(); child.waitUntilExit() }
     let digest = SHA256.hash(data: png).map { String(format: "%02x", $0) }.joined()
     let received = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-    try check(child.terminationStatus == 0 && received == digest, "cross_process_eager_png_exact_bytes")
+    try check(child.terminationStatus == 0 && received == digest, "cross_process_original_file_exact_bytes")
     try check(lease.restore() == "restored", "restoration")
     try check(pb.string(forType: .string) == "original\nclipboard 🧗", "text_round_trip")
     try check(pb.data(forType: .init("com.example.receiver-test")) == Data([0, 255, 1]), "custom_format_round_trip")
-    let changed = try ClipboardLease(pb); try changed.stage(png)
+    let changed = try ClipboardLease(pb); try changed.stage(originalImage)
     pb.clearContents(); pb.setString("newer clipboard", forType: .string)
     try check(changed.restore() == "newer_preserved", "newer_preserved")
     try check(pb.string(forType: .string) == "newer clipboard", "newer_untouched")
     let stale = try ClipboardLease(pb)
     pb.clearContents(); pb.setString("changed before stage", forType: .string)
-    do { try stale.stage(png); throw DeliveryRefusal(reason: "platform_test_stale_stage_accepted") }
+    do { try stale.stage(originalImage); throw DeliveryRefusal(reason: "platform_test_stale_stage_accepted") }
     catch let error as DeliveryRefusal { try check(error.reason == "clipboard_changed_before_stage", "stale_snapshot_refused") }
     let lockDirectory = FileManager.default.temporaryDirectory.appendingPathComponent("CodexReceiverLockTest-" + UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: lockDirectory) }

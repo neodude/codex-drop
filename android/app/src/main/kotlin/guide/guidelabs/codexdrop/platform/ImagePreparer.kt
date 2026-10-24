@@ -1,18 +1,15 @@
 package guide.guidelabs.codexdrop.platform
 
 import android.content.ContentResolver
-import android.graphics.Bitmap
-import android.graphics.ColorSpace
-import android.graphics.ImageDecoder
 import android.net.Uri
 import android.os.CancellationSignal
 import guide.guidelabs.codexdrop.core.*
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeout
-import java.io.ByteArrayOutputStream
+import java.io.File
 import java.io.InputStream
-import java.nio.ByteBuffer
+import java.io.RandomAccessFile
 import java.util.concurrent.SynchronousQueue
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
@@ -20,7 +17,8 @@ import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
-class ImagePreparer(private val resolver: ContentResolver) {
+/** Reads the provider's original stream without decoding or modifying the image. */
+class ImagePreparer(private val resolver: ContentResolver, private val cacheDirectory: File) {
     companion object {
         // Bound even a broken provider that ignores cancellation; never accumulate queued reads.
         private val workers = ThreadPoolExecutor(0,2,30,TimeUnit.SECONDS,SynchronousQueue(), { runnable -> Thread(runnable,"CodexDrop-image").apply { isDaemon = true } })
@@ -28,65 +26,72 @@ class ImagePreparer(private val resolver: ContentResolver) {
     suspend fun prepare(uri: Uri): ByteArray {
         if (uri.scheme != "content") throw DropFailure("Share an image from the screenshot preview or Photos.")
         try {
-            return withTimeout(20_000) {
+            return withTimeout(120_000) {
                 suspendCancellableCoroutine { continuation ->
                     val signal = CancellationSignal()
                     val streamRef = AtomicReference<InputStream?>()
                     try {
                         val future = workers.submit {
+                            var temporary: File? = null
+                            var result: ByteArray? = null
+                            var failure: Exception? = null
+                            fun checkActive() { if (!continuation.isActive || Thread.currentThread().isInterrupted) throw InterruptedException() }
                             try {
-                                val input = resolver.openAssetFileDescriptor(uri,"r",signal)?.use { asset ->
-                                    asset.createInputStream().use { stream ->
-                                        streamRef.set(stream)
-                                        val output = ByteArrayOutputStream();val buffer = ByteArray(16 * 1024)
-                                        while (continuation.isActive) {
-                                            val count = stream.read(buffer)
-                                            if (count == -1) break
-                                            if (output.size().toLong() + count > MAX_IMAGE_BYTES) throw DropFailure("Each image must be at most 20 MiB.")
-                                            output.write(buffer,0,count)
+                                cacheDirectory.mkdirs()
+                                val original = File.createTempFile("codex-drop-original-", ".tmp", cacheDirectory)
+                                temporary = original
+                                val bytes = RandomAccessFile(original, "rw").use { cache ->
+                                    // Unlink immediately: even process death cannot leave a cached image behind.
+                                    if (!original.delete()) throw DropFailure("Couldn’t create a private image buffer. Try sharing again.")
+                                    resolver.openAssetFileDescriptor(uri,"r",signal)?.use { asset ->
+                                        asset.createInputStream().use { stream ->
+                                            streamRef.set(stream)
+                                            val buffer = ByteArray(16 * 1024)
+                                            var total = 0L
+                                            while (true) {
+                                                checkActive()
+                                                val count = stream.read(buffer)
+                                                if (count == -1) break
+                                                total += count
+                                                if (total > MAX_IMAGE_BYTES) throw DropFailure("Each image must be at most 50 MiB.")
+                                                cache.write(buffer,0,count)
+                                            }
                                         }
-                                        if (!continuation.isActive) throw InterruptedException()
-                                        output.toByteArray()
+                                    } ?: throw DropFailure("Couldn’t open the shared image. Share it again from Photos.")
+                                    streamRef.set(null)
+                                    checkActive()
+                                    // Allocate once after bounding the stream; never decode or copy an expanding buffer.
+                                    val image = ByteArray(cache.length().toInt())
+                                    cache.seek(0)
+                                    var offset = 0
+                                    while (offset < image.size) {
+                                        checkActive()
+                                        val count = minOf(16 * 1024, image.size - offset)
+                                        cache.readFully(image, offset, count)
+                                        offset += count
                                     }
-                                } ?: throw DropFailure("Couldn’t open the shared image. Share it again from Photos.")
-                                streamRef.set(null)
-                                if (!continuation.isActive) return@submit
-                                val png = encode(input)
-                                if (continuation.isActive) continuation.resume(png)
+                                    image
+                                }
+                                validateImageBytes(bytes)
+                                checkActive()
+                                result = bytes
+                            } catch (_: OutOfMemoryError) {
+                                failure = DropFailure("There isn’t enough memory to read this image. Try a smaller image.")
                             } catch (error: Exception) {
-                                if (continuation.isActive) continuation.resumeWithException(if (error is DropFailure) error else DropFailure("Couldn’t read this image. Its sharing permission may have expired."))
+                                failure = if (error is DropFailure) error else DropFailure("Couldn’t read this image. Its sharing permission may have expired.")
+                            } finally {
+                                streamRef.set(null)
+                                temporary?.delete()
+                            }
+                            if (continuation.isActive) {
+                                failure?.let { continuation.resumeWithException(it) }
+                                    ?: result?.let { continuation.resume(it) }
                             }
                         }
                         continuation.invokeOnCancellation { runCatching { signal.cancel() };runCatching { streamRef.getAndSet(null)?.close() };future.cancel(true) }
-                    } catch (_: Exception) { continuation.resumeWithException(DropFailure("Another image is still being prepared. Try a fresh share shortly.")) }
+                    } catch (_: Exception) { continuation.resumeWithException(DropFailure("Another image is still being read. Try a fresh share shortly.")) }
                 }
             }
         } catch (_: TimeoutCancellationException) { throw DropFailure("Reading this image timed out. This batch was not attached.") }
-    }
-    private fun encode(input: ByteArray): ByteArray {
-        if (input.size >= 8 && input.copyOf(8).contentEquals(byteArrayOf(-119,80,78,71,13,10,26,10))) {
-            validatePng(input);return input
-        }
-        val source = ImageDecoder.createSource(ByteBuffer.wrap(input))
-        val bitmap = ImageDecoder.decodeBitmap(source) { decoder,info,_ ->
-            val pixels = info.size.width.toLong() * info.size.height
-            if (pixels !in 1..MAX_PIXELS) throw DropFailure("This image exceeds 12 million pixels. Crop it before sharing.")
-            decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
-            decoder.setTargetColorSpace(ColorSpace.get(ColorSpace.Named.SRGB))
-        }
-        try {
-            val output = object : ByteArrayOutputStream() {
-                override fun write(bytes: ByteArray, offset: Int, length: Int) {
-                    if (size().toLong() + length > MAX_IMAGE_BYTES) throw DropFailure("The prepared PNG exceeds 20 MiB.")
-                    super.write(bytes,offset,length)
-                }
-                override fun write(byte: Int) {
-                    if (size() >= MAX_IMAGE_BYTES) throw DropFailure("The prepared PNG exceeds 20 MiB.")
-                    super.write(byte)
-                }
-            }
-            if (!bitmap.compress(Bitmap.CompressFormat.PNG,100,output)) throw DropFailure("Couldn’t prepare this image as PNG.")
-            return output.toByteArray().also(::validatePng)
-        } finally { bitmap.recycle() }
     }
 }

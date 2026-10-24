@@ -37,15 +37,15 @@ import ImageIO
             guard (1...10).contains(items.count) else { throw ReceiverError.message("Share 1–10 images at a time.") }
             sheet.render(status: "Finding your Mac…", detail: Self.destination(count: items.count), stage: 0)
             let client = ReceiverClient(pairing: pairing); defer { client.close() }
-            let job = try await client.attachBatch(count: items.count, id: requestID, prepare: { index in
+            let job = try await client.attachBatch(count: items.count, id: requestID, prepareFile: { index in
                 let input = try await Self.readImage(items[index])
-                return try await ImageEncoder.png(input)
+                return try await ImageInput.originalFile(input)
             }, progress: { [self] progress in
                 switch progress {
                 case let .preparing(index, count):
-                    sheet.render(status: "Preparing screenshot \(index + 1) of \(count)", detail: Self.destination(count: count), stage: 1)
+                    sheet.render(status: "Reading image \(index + 1) of \(count)", detail: Self.destination(count: count), stage: 1)
                 case let .uploading(index, count):
-                    sheet.render(status: "Uploading screenshot \(index + 1) of \(count)", detail: Self.destination(count: count), stage: 1)
+                    sheet.render(status: "Uploading image \(index + 1) of \(count)", detail: Self.destination(count: count), stage: 1)
                 case .committing:
                     committed = true
                     sheet.render(status: "Attaching to Codex…", detail: "You can close this sheet. Delivery will continue on your Mac.", stage: 2, buttonTitle: "Close")
@@ -71,24 +71,50 @@ import ImageIO
     private static func destination(count: Int) -> String {
         count == 1 ? "Your Mac will add this image\nto the current draft." : "Your Mac will add all \(count) images\nto the current draft."
     }
-    private static func readImage(_ item: NSItemProvider) async throws -> Data {
-        let type = item.hasItemConformingToTypeIdentifier(UTType.png.identifier) ? UTType.png.identifier : UTType.image.identifier
-        return try await withCheckedThrowingContinuation { continuation in
-            item.loadFileRepresentation(forTypeIdentifier: type) { url, error in
-                do {
-                    guard let url else { throw error ?? ReceiverError.message("Could not read the shared image.") }
-                    let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
-                    guard size > 0, size <= 20 * 1024 * 1024 else { throw ReceiverError.message("Each image must be at most 20 MiB.") }
-                    // Copy before this callback returns: the provider owns the temporary file.
-                    let data = try Data(contentsOf: url)
-                    guard data.count <= 20 * 1024 * 1024 else { throw ReceiverError.message("The image is too large.") }
-                    continuation.resume(returning: data)
-                } catch { continuation.resume(throwing: error) }
-            }
+    private static func readImage(_ item: NSItemProvider) async throws -> ImageFile {
+        guard let type = ImageInput.originalTypeIdentifier(in: item.registeredTypeIdentifiers) else {
+            throw ReceiverError.message("The source app did not provide a concrete image file representation. Share an image file from Photos or Files; Codex Drop will not convert it.")
         }
+        let load = ImageProviderLoad()
+        let image = try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<ImageFile, any Error>) in
+                let progress = item.loadFileRepresentation(forTypeIdentifier: type) { url, error in
+                    defer { load.finish() }
+                    do {
+                        guard let url else { throw error ?? ImageInput.unreadableError }
+                        // Provider files stop being valid as soon as this callback returns.
+                        let image = try ImageFile.copy(from: url, cancelled: { load.isCancelled })
+                        continuation.resume(returning: image)
+                    } catch {
+                        continuation.resume(throwing: error is ReceiverError || error is CancellationError ? error : ImageInput.unreadableError)
+                    }
+                }
+                load.setProgress(progress)
+            }
+        } onCancel: { load.cancel() }
+        try Task.checkCancellation()
+        return image
     }
     @objc private func closeExtension() {
         transfer?.cancel()
         extensionContext?.completeRequest(returningItems: [], completionHandler: nil)
+    }
+}
+
+// The provider callback and cancellation handler can run on different queues.
+private final class ImageProviderLoad: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancelled = false
+    private var finished = false
+    private var progress: Progress?
+    var isCancelled: Bool { lock.lock(); defer { lock.unlock() }; return cancelled }
+    func setProgress(_ progress: Progress) {
+        lock.lock(); if !finished { self.progress = progress }; let cancel = cancelled; lock.unlock()
+        if cancel { progress.cancel() }
+    }
+    func finish() { lock.lock(); finished = true; progress = nil; lock.unlock() }
+    func cancel() {
+        lock.lock(); cancelled = true; let progress = progress; lock.unlock()
+        progress?.cancel()
     }
 }

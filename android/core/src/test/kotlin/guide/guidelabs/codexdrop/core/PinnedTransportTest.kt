@@ -24,6 +24,23 @@ class PinnedTransportTest {
             }
         }
     }
+    @Test fun fiftyMiBImageUploadsOnceOverPinnedConnectionEvenWhenServerRequestsRetry() = runBlocking {
+        val cert = HeldCertificate.Builder().commonName("Fixture Mac").build()
+        MockWebServer().use { server ->
+            server.useHttps(HandshakeCertificates.Builder().heldCertificate(cert).build().sslSocketFactory(), false)
+            server.bodyLimit = 0
+            server.enqueue(MockResponse().setResponseCode(503).addHeader("Retry-After", "0"))
+            server.enqueue(MockResponse().setBody("unexpected replay"));server.start()
+            PinnedHttpsTransport(pairing(cert), Endpoint(listOf(InetAddress.getLoopbackAddress()), server.port)).use { client ->
+                val request = HttpRequest("v1/batches/$TEST_ID/images/0", png(size = MAX_IMAGE_BYTES), "application/octet-stream")
+                assertEquals(503, client.execute(request).statusCode)
+                val recorded = server.takeRequest()
+                assertEquals(MAX_IMAGE_BYTES.toLong(), recorded.bodySize)
+                assertEquals("Bearer " + "b".repeat(43), recorded.getHeader("Authorization"))
+                assertEquals(1, server.requestCount)
+            }
+        }
+    }
     @Test fun changedCertificateNeverReceivesTheBearerToken() {
         val paired = HeldCertificate.Builder().commonName("Paired Mac").build()
         val stranger = HeldCertificate.Builder().commonName("Spoofed Mac").build()

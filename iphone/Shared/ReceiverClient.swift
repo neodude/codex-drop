@@ -126,6 +126,7 @@ final class PinnedSessionDelegate: NSObject, URLSessionDelegate, URLSessionTaskD
     typealias Transport = @MainActor (URLRequest) async throws -> (Data, Int)
     private let pairing: Pairing
     private let session: URLSession
+    private let uploadSession: URLSession
     private let baseURL: URL?
     private let transport: Transport?
     private let pollTimeout: Duration
@@ -135,8 +136,11 @@ final class PinnedSessionDelegate: NSObject, URLSessionDelegate, URLSessionTaskD
         config.timeoutIntervalForRequest = 10; config.timeoutIntervalForResource = 20
         config.httpShouldSetCookies = false; config.urlCache = nil
         session = URLSession(configuration: config, delegate: PinnedSessionDelegate(pin: pairing.pin), delegateQueue: nil)
+        let uploadConfig = config.copy() as! URLSessionConfiguration
+        uploadConfig.timeoutIntervalForRequest = 120; uploadConfig.timeoutIntervalForResource = 120
+        uploadSession = URLSession(configuration: uploadConfig, delegate: PinnedSessionDelegate(pin: pairing.pin), delegateQueue: nil)
     }
-    func close() { session.invalidateAndCancel() }
+    func close() { session.invalidateAndCancel(); uploadSession.invalidateAndCancel() }
     private func request(_ base: URL, path: String, body: Data? = nil, id: String? = nil,
                          contentType: String = "application/json", timeout: TimeInterval = 10) async throws -> (Data, Int) {
         try Task.checkCancellation()
@@ -159,12 +163,42 @@ final class PinnedSessionDelegate: NSObject, URLSessionDelegate, URLSessionTaskD
         if code == 401 { throw ReceiverError.message("Pairing was rejected. Scan the Mac's QR code again.") }
         return (data, code)
     }
+    private func upload(_ base: URL, path: String, image: ImageFile) async throws -> (Data, Int) {
+        try Task.checkCancellation()
+        var request = URLRequest(url: base.appendingPathComponent(path))
+        request.httpMethod = "POST"
+        request.timeoutInterval = 120
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.setValue("Bearer " + pairing.token, forHTTPHeaderField: "Authorization")
+        request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+        request.setValue(String(image.byteCount), forHTTPHeaderField: "Content-Length")
+        let data: Data, code: Int
+        if let transport {
+            // Test injection consumes the file stream; production uploads from disk.
+            request.httpBodyStream = InputStream(url: image.url)
+            (data, code) = try await transport(request)
+        } else {
+            let (received, response) = try await uploadSession.upload(for: request, fromFile: image.url)
+            guard let response = response as? HTTPURLResponse else { throw ReceiverError.message("The Mac returned an invalid response.") }
+            data = received; code = response.statusCode
+        }
+        if code == 401 { throw ReceiverError.message("Pairing was rejected. Scan the Mac's QR code again.") }
+        return (data, code)
+    }
     func checkConnection() async throws {
         let base = try await ServiceResolver().resolve(pairing.service, timeout: 20)
         let (_, code) = try await request(base, path: "v1/jobs/00000000-0000-0000-0000-000000000000")
         guard code == 404 else { throw ReceiverError.message("The Mac receiver did not answer as expected.") }
     }
     func attachBatch(count: Int, id: String, prepare: (Int) async throws -> Data,
+                     progress: (BatchProgress) -> Void = { _ in },
+                     timing: (String, Int) -> Void = { _, _ in }) async throws -> DeliveryJob {
+        try await attachBatch(count: count, id: id, prepareFile: { index in
+            // The Data value is released when this closure returns, before upload begins.
+            try ImageFile.stage(await prepare(index))
+        }, progress: progress, timing: timing)
+    }
+    func attachBatch(count: Int, id: String, prepareFile: (Int) async throws -> ImageFile,
                      progress: (BatchProgress) -> Void = { _ in },
                      timing: (String, Int) -> Void = { _, _ in }) async throws -> DeliveryJob {
         guard (1...10).contains(count), UUID(uuidString: id)?.uuidString.lowercased() == id else {
@@ -178,7 +212,17 @@ final class PinnedSessionDelegate: NSObject, URLSessionDelegate, URLSessionTaskD
         struct Receipt: Decodable { let received: Bool; let job: DeliveryJob }
         func receipt(_ response: (Data, Int)) throws -> DeliveryJob {
             guard response.1 == 200 || response.1 == 202 else {
-                throw ReceiverError.message("The Mac refused the request (HTTP \(response.1)). No automatic retry.")
+                let code = (try? JSONSerialization.jsonObject(with: response.0)) as? [String: Any]
+                switch code?["error"] as? String {
+                case "image_size_limit": throw ImageInput.byteLimitError
+                case "unsupported_image_format":
+                    if let message = code?["message"] as? String, !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        throw ReceiverError.message(message)
+                    }
+                    throw ReceiverError.message("This image format is not supported. Share JPEG, PNG, GIF, or WebP. In Photos, choose Automatic or Most Compatible.")
+                case "invalid_image", "unsupported_image", "invalid_png": throw ReceiverError.message("The Mac could not read this original image or does not support its format.")
+                default: throw ReceiverError.message("The Mac refused the request (HTTP \(response.1)). No automatic retry.")
+                }
             }
             let value = try JSONDecoder().decode(Receipt.self, from: response.0)
             guard value.received, value.job.id == id else { throw ReceiverError.message("The Mac returned an invalid receipt.") }
@@ -190,19 +234,18 @@ final class PinnedSessionDelegate: NSObject, URLSessionDelegate, URLSessionTaskD
             try Task.checkCancellation()
             progress(.preparing(index, count))
             let preparedAt = ProcessInfo.processInfo.systemUptime
-            // Scope each PNG to one upload. Never accumulate the batch's image data.
+            // Scope each original file to one upload. Never accumulate the batch's image data.
             do {
-                let png = try await prepare(index)
+                let image = try await prepareFile(index)
                 preparingMS += Int((ProcessInfo.processInfo.systemUptime - preparedAt) * 1000)
                 try Task.checkCancellation()
-                guard !png.isEmpty, png.count <= 20 * 1024 * 1024 else {
-                    throw ReceiverError.message("Each image must be at most 20 MiB.")
-                }
-                totalBytes += png.count
+                guard image.byteCount > 0 else { throw ImageInput.unreadableError }
+                guard image.byteCount <= ImageInput.maximumBytes else { throw ImageInput.byteLimitError }
+                totalBytes += image.byteCount
                 guard totalBytes <= 100 * 1024 * 1024 else { throw ReceiverError.message("The batch must be at most 100 MiB.") }
                 progress(.uploading(index, count))
                 let uploadAt = ProcessInfo.processInfo.systemUptime
-                _ = try receipt(await request(base, path: "v1/batches/" + id + "/images/\(index)", body: png, contentType: "image/png"))
+                _ = try receipt(await upload(base, path: "v1/batches/" + id + "/images/\(index)", image: image))
                 uploadMS += Int((ProcessInfo.processInfo.systemUptime - uploadAt) * 1000)
             }
         }

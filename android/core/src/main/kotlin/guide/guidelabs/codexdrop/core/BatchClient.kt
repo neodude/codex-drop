@@ -4,11 +4,9 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
-import java.nio.ByteBuffer
 
-const val MAX_IMAGE_BYTES = 20 * 1024 * 1024
+const val MAX_IMAGE_BYTES = 50 * 1024 * 1024
 const val MAX_BATCH_BYTES = 100 * 1024 * 1024
-const val MAX_PIXELS = 12_000_000L
 
 data class HttpRequest(val path: String, val body: ByteArray? = null, val contentType: String = "application/json", val requestId: String? = null)
 data class HttpReply(val statusCode: Int, val body: ByteArray)
@@ -20,13 +18,9 @@ sealed interface TransferProgress {
     data object Confirming : TransferProgress
 }
 
-fun validatePng(bytes: ByteArray) {
-    if (bytes.size !in 33..MAX_IMAGE_BYTES || !bytes.copyOfRange(0, 8).contentEquals(byteArrayOf(-119,80,78,71,13,10,26,10))) throw DropFailure("Each prepared PNG must be at most 20 MiB.")
-    val header = ByteBuffer.wrap(bytes)
-    if (header.getInt(8) != 13 || header.getInt(12) != 0x49484452) throw DropFailure("The shared image is not a supported PNG.")
-    val width = header.getInt(16).toLong() and 0xffffffffL
-    val height = header.getInt(20).toLong() and 0xffffffffL
-    if (width !in 1..MAX_PIXELS || height !in 1..MAX_PIXELS || width * height > MAX_PIXELS) throw DropFailure("This image is too large. Use a screenshot of at most 12 million pixels.")
+fun validateImageBytes(bytes: ByteArray) {
+    if (bytes.isEmpty()) throw DropFailure("The shared image is empty. Share it again from Photos.")
+    if (bytes.size > MAX_IMAGE_BYTES) throw DropFailure("Each image must be at most 50 MiB.")
 }
 
 class BatchClient(private val transport: Transport, private val pollTimeoutMillis: Long = 120_000, private val nowMillis: () -> Long = { System.nanoTime() / 1_000_000 }) {
@@ -53,13 +47,13 @@ class BatchClient(private val transport: Transport, private val pollTimeoutMilli
                 currentCoroutineContext().ensureActive()
                 progress(TransferProgress.Preparing(index, count))
                 // Each image is scoped to one upload; never retain the whole batch.
-                val png = prepare(index)
+                val image = prepare(index)
                 currentCoroutineContext().ensureActive()
-                validatePng(png)
-                totalBytes += png.size
+                validateImageBytes(image)
+                totalBytes += image.size
                 if (totalBytes > MAX_BATCH_BYTES) throw DropFailure("The batch must be at most 100 MiB.")
                 progress(TransferProgress.Uploading(index, count))
-                val staged = receipt(transport.execute(HttpRequest("v1/batches/$id/images/$index", png, "image/png")), id)
+                val staged = receipt(transport.execute(HttpRequest("v1/batches/$id/images/$index", image, "application/octet-stream")), id)
                 if (staged.state != "uploading") throw DropFailure("The Mac returned an unexpected staging receipt. Check before sharing again.", true)
             }
             currentCoroutineContext().ensureActive()
@@ -96,6 +90,14 @@ class BatchClient(private val transport: Transport, private val pollTimeoutMilli
     }
     private fun requireStatus(response: HttpReply, accepted: Set<Int>) {
         if (response.statusCode == 401) throw DropFailure("Pairing was rejected. Scan the Mac’s QR code again.")
-        if (response.statusCode !in accepted) throw DropFailure("The Mac refused the request. Check the receiver before sharing again. No automatic retry.")
+        if (response.statusCode !in accepted) {
+            val error = runCatching { StrictJson.objectValue(response.body) }.getOrNull()
+            if (error?.get("error") == "unsupported_image_format") {
+                val message = (error["message"] as? String)?.takeIf { it.length in 1..512 && it.isNotBlank() && it.none(Char::isISOControl) }
+                    ?: "Codex accepts JPEG, PNG, GIF and WebP image inputs. Share one of those formats instead."
+                throw DropFailure(message)
+            }
+            throw DropFailure("The Mac refused the request. Check the receiver before sharing again. No automatic retry.")
+        }
     }
 }

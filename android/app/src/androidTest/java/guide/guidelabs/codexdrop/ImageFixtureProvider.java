@@ -34,6 +34,75 @@ public final class ImageFixtureProvider extends ContentProvider {
                 if ("slow.png".equals(uri.getLastPathSegment()) || "blocked.png".equals(uri.getLastPathSegment())) {
                     try { Thread.sleep("blocked.png".equals(uri.getLastPathSegment()) ? 15000 : 3000); } catch (InterruptedException e) { Thread.currentThread().interrupt(); return; }
                 }
+                String name = uri.getLastPathSegment();
+                if (name.equals("camera.png") || name.equals("camera.jpg") || name.startsWith("oriented-") || name.equals("large.jpg") || name.equals("original.webp")) {
+                    int width = name.startsWith("oriented-") ? 4000 : name.equals("large.jpg") ? 5000 : 3024;
+                    int height = name.startsWith("oriented-") ? 3500 : name.equals("large.jpg") ? 4000 : 4032;
+                    Bitmap photo = Bitmap.createBitmap(width,height,Bitmap.Config.ARGB_8888);
+                    android.graphics.Canvas canvas = new android.graphics.Canvas(photo);
+                    android.graphics.Paint paint = new android.graphics.Paint();
+                    int[] colors = { android.graphics.Color.RED,android.graphics.Color.GREEN,android.graphics.Color.BLUE,android.graphics.Color.YELLOW };
+                    for (int i = 0; i < 4; i++) { paint.setColor(colors[i]);canvas.drawRect((i % 2) * width / 2f,(i / 2) * height / 2f,(i % 2 + 1) * width / 2f,(i / 2 + 1) * height / 2f,paint); }
+                    java.io.File temporary = java.io.File.createTempFile("photo-fixture-", ".jpg", getContext().getCacheDir());
+                    try {
+                        try (java.io.FileOutputStream file = new java.io.FileOutputStream(temporary)) { photo.compress(name.endsWith(".png") ? Bitmap.CompressFormat.PNG : name.endsWith(".webp") ? Bitmap.CompressFormat.WEBP_LOSSLESS : Bitmap.CompressFormat.JPEG,100,file); }
+                        finally { photo.recycle(); }
+                        if (name.startsWith("oriented-")) {
+                            android.media.ExifInterface exif = new android.media.ExifInterface(temporary.getAbsolutePath());
+                            exif.setAttribute(android.media.ExifInterface.TAG_ORIENTATION, name.substring(9,10));
+                            exif.setAttribute(android.media.ExifInterface.TAG_ARTIST, "Synthetic original metadata");
+                            exif.setAttribute(android.media.ExifInterface.TAG_USER_COMMENT, "Preserve this original file exactly");
+                            exif.saveAttributes();
+                        }
+                        try (java.io.FileInputStream file = new java.io.FileInputStream(temporary)) {
+                            if (name.startsWith("oriented-")) {
+                                // Insert a generated LittleCMS sRGB ICC APP2 record without changing the EXIF JPEG payload.
+                                stream.write(file.read());stream.write(file.read());
+                                byte[] profile;
+                                try (java.io.InputStream resource = ImageFixtureProvider.class.getResourceAsStream("/sRGB.icc")) {
+                                    if (resource == null) throw new IOException("Missing synthetic ICC fixture");
+                                    java.io.ByteArrayOutputStream profileBytes = new java.io.ByteArrayOutputStream();
+                                    byte[] buffer = new byte[4096];int n;while ((n = resource.read(buffer)) != -1) profileBytes.write(buffer,0,n);
+                                    profile = profileBytes.toByteArray();
+                                }
+                                java.io.DataOutputStream record = new java.io.DataOutputStream(stream);
+                                record.writeByte(0xff);record.writeByte(0xe2);record.writeShort(profile.length + 16);
+                                record.write(new byte[]{73,67,67,95,80,82,79,70,73,76,69,0,1,1});record.write(profile);
+                            }
+                            byte[] bytes = new byte[16384];int n;while ((n = file.read(bytes)) != -1) stream.write(bytes,0,n);
+                        }
+                    } finally { temporary.delete(); }
+                    return;
+                }
+                if (name.equals("padded-25.png") || name.equals("padded-50.png") || name.equals("padded-over.png")) {
+                    Bitmap tiny = Bitmap.createBitmap(4,4,Bitmap.Config.ARGB_8888);
+                    java.io.ByteArrayOutputStream png = new java.io.ByteArrayOutputStream();
+                    try { tiny.compress(Bitmap.CompressFormat.PNG,100,png); } finally { tiny.recycle(); }
+                    byte[] base = png.toByteArray();
+                    int total = name.equals("padded-25.png") ? 25 * 1024 * 1024 : 50 * 1024 * 1024 + (name.equals("padded-over.png") ? 1 : 0);
+                    int chunkLength = total - base.length - 12;
+                    stream.write(base,0,base.length - 12);
+                    java.io.DataOutputStream data = new java.io.DataOutputStream(stream);
+                    data.writeInt(chunkLength);
+                    byte[] type = new byte[]{114,112,65,100};data.write(type);
+                    java.util.zip.CRC32 crc = new java.util.zip.CRC32();crc.update(type);
+                    byte[] zeros = new byte[16384];
+                    for (int remaining = chunkLength; remaining > 0;) { int n = Math.min(zeros.length,remaining);data.write(zeros,0,n);crc.update(zeros,0,n);remaining -= n; }
+                    data.writeInt((int)crc.getValue());data.write(base,base.length - 12,12);
+                    return;
+                }
+                if (name.equals("original.gif")) {
+                    stream.write(android.util.Base64.decode("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7", android.util.Base64.DEFAULT));
+                    return;
+                }
+                if (name.equals("original.heic")) {
+                    // Task-generated valid ImageIO HEIC fixture, containing no personal image data.
+                    try (java.io.InputStream resource = ImageFixtureProvider.class.getResourceAsStream("/synthetic.heic")) {
+                        if (resource == null) throw new IOException("Missing synthetic HEIC fixture");
+                        byte[] bytes = new byte[4096];int n;while ((n = resource.read(bytes)) != -1) stream.write(bytes,0,n);
+                    }
+                    return;
+                }
                 switch (uri.getLastPathSegment()) {
                     case "noise.png":
                         Bitmap noise = Bitmap.createBitmap(1024,1024,Bitmap.Config.ARGB_8888);
@@ -44,11 +113,11 @@ public final class ImageFixtureProvider extends ContentProvider {
                         break;
                     case "too-large":
                         byte[] buffer = new byte[1024];
-                        for (int i = 0; i < 20 * 1024 + 1; i++) stream.write(buffer);
+                        for (int i = 0; i < 50 * 1024 + 1; i++) stream.write(buffer);
                         break;
                     case "not-image": stream.write(new byte[]{1,2,3}); break;
                     case "too-many-pixels.png":
-                        stream.write(ByteBuffer.allocate(33).put(new byte[]{-119,80,78,71,13,10,26,10}).putInt(13).put(new byte[]{73,72,68,82}).putInt(12_000_001).putInt(1).put(new byte[]{8,6,0,0,0}).putInt(0).array()); break;
+                        stream.write(ByteBuffer.allocate(33).put(new byte[]{-119,80,78,71,13,10,26,10}).putInt(13).put(new byte[]{73,72,68,82}).putInt(8001).putInt(8000).put(new byte[]{8,6,0,0,0}).putInt(0).array()); break;
                     default:
                         Bitmap bitmap = Bitmap.createBitmap(4,4,Bitmap.Config.ARGB_8888);
                         try { bitmap.compress(uri.getPath().endsWith(".jpg") ? Bitmap.CompressFormat.JPEG : Bitmap.CompressFormat.PNG,100,stream); }

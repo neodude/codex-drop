@@ -16,6 +16,60 @@ if AVAILABLE:
     from mac_receiver import JobQueue, Conflict, InvalidImage, DeliveryWorker, validate_png, make_server, token_for, process_lock
 
 
+def generated_png(width=1, height=1, padded_size=None, interlaced=False, bit_depth=8):
+    """Real RGBA PNG with bounded row compression and optional safe ancillary padding."""
+    def chunk(kind, payload):
+        return (struct.pack(">I", len(payload)) + kind + payload +
+                struct.pack(">I", zlib.crc32(kind + payload) & 0xFFFFFFFF))
+    compressor = zlib.compressobj()
+    passes = ((0, 0, 8, 8), (4, 0, 8, 8), (0, 4, 4, 8), (2, 0, 4, 4),
+              (0, 2, 2, 4), (1, 0, 2, 2), (0, 1, 1, 2)) if interlaced else ((0, 0, 1, 1),)
+    parts = []
+    for x, y, dx, dy in passes:
+        columns, rows = max(0, (width-x+dx-1)//dx), max(0, (height-y+dy-1)//dy)
+        if columns:
+            row = bytes(1 + columns * 4 * (bit_depth//8))
+            parts.extend(compressor.compress(row) for _ in range(rows))
+    parts.append(compressor.flush())
+    png = (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, bit_depth, 6, 0, 0, int(interlaced))) +
+           chunk(b"IDAT", b"".join(parts)))
+    ending = chunk(b"IEND", b"")
+    if padded_size is not None:
+        padding = padded_size - len(png) - len(ending) - 12
+        if padding < 0:
+            raise ValueError("PNG padding target too small")
+        png += chunk(b"npAd", bytes(padding))
+    return png + ending
+
+
+class PNGImageLimitTests(unittest.TestCase):
+    def test_png_byte_limit_accepts_over_20_mib_and_exactly_50_mib(self):
+        for size in (20 * 1024 * 1024 + 1, 50 * 1024 * 1024):
+            with self.subTest(size=size):
+                self.assertEqual(validate_png(generated_png(padded_size=size)), (1, 1))
+
+    def test_over_50_mib_reports_byte_limit(self):
+        with self.assertRaisesRegex(InvalidImage, "50 MiB"):
+            validate_png(generated_png(padded_size=50 * 1024 * 1024 + 1))
+
+    def test_photo_pixel_and_axis_boundaries(self):
+        for width, height in ((4032, 3024), (8064, 6048), (8000, 8000), (32768, 1), (1, 32768)):
+            with self.subTest(width=width, height=height):
+                self.assertEqual(validate_png(generated_png(width, height)), (width, height))
+
+    def test_original_png_transfer_does_not_restrict_pixel_dimensions(self):
+        for width, height in ((8000, 8001), (32769, 1), (1, 32769)):
+            with self.subTest(width=width, height=height):
+                self.assertEqual(validate_png(generated_png(width, height)), (width, height))
+
+    def test_bad_checksum_and_truncated_png_remain_invalid(self):
+        png = generated_png()
+        damaged = bytearray(png); damaged[29] ^= 1
+        for data in (bytes(damaged), png[:-5], png + b"trailing"):
+            with self.subTest(length=len(data)):
+                with self.assertRaises(InvalidImage): validate_png(data)
+
+
 class AvailabilityTests(unittest.TestCase):
     def test_receiver_exists(self):
         self.assertTrue(AVAILABLE, "The durable receiver has not been implemented yet")
@@ -178,12 +232,12 @@ class QueueTests(unittest.TestCase):
         self.assertEqual(self.enqueue(key)["state"], "verified")
         self.assertFalse(worker.once())
 
-    def test_corrupt_and_oversized_png_header_is_rejected_before_decode(self):
+    def test_corrupt_and_zero_dimension_png_header_is_rejected_without_decode(self):
         damaged = bytearray(self.png); damaged[-5] ^= 1
         with self.assertRaises(InvalidImage):
             validate_png(bytes(damaged))
         huge = bytearray(self.png)
-        struct.pack_into(">I", huge, 16, 100_000)
+        struct.pack_into(">I", huge, 16, 0)
         struct.pack_into(">I", huge, 29, zlib.crc32(huge[12:29]) & 0xFFFFFFFF)
         with self.assertRaises(InvalidImage):
             validate_png(bytes(huge))

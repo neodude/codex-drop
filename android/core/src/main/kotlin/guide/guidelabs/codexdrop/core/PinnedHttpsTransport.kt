@@ -31,6 +31,7 @@ class PinnedHttpsTransport(pairing: Pairing, endpoint: Endpoint) : Transport, Cl
     private val base = HttpUrl.Builder().scheme("https").host(host).port(endpoint.port).build()
     private val token = pairing.token
     private val client: OkHttpClient
+    private val uploadClient: OkHttpClient
     private val closed = AtomicBoolean(false)
     init {
         val expected = pairing.pin.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
@@ -57,6 +58,8 @@ class PinnedHttpsTransport(pairing: Pairing, endpoint: Endpoint) : Transport, Cl
             .protocols(listOf(Protocol.HTTP_1_1)) // The paired Python receiver speaks HTTP/1.1.
             .connectTimeout(5, TimeUnit.SECONDS).readTimeout(10, TimeUnit.SECONDS).writeTimeout(20, TimeUnit.SECONDS)
             .callTimeout(25, TimeUnit.SECONDS).build()
+        // Larger images may need time on Wi-Fi. Keep a finite whole-call deadline and one-shot bodies.
+        uploadClient = client.newBuilder().writeTimeout(120, TimeUnit.SECONDS).callTimeout(120, TimeUnit.SECONDS).build()
     }
     override suspend fun execute(request: HttpRequest): HttpReply {
         if (closed.get()) throw IOException("Receiver connection is closed")
@@ -74,7 +77,8 @@ class PinnedHttpsTransport(pairing: Pairing, endpoint: Endpoint) : Transport, Cl
             })
         }
         request.requestId?.let { builder.header("X-Request-ID", it) }
-        val call = client.newCall(builder.build())
+        val sender = if (request.path.matches(Regex("v1/batches/[0-9a-f-]{36}/images/[0-9]"))) uploadClient else client
+        val call = sender.newCall(builder.build())
         return suspendCancellableCoroutine { continuation ->
             continuation.invokeOnCancellation { call.cancel() }
             call.enqueue(object : Callback {

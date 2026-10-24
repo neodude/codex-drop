@@ -22,7 +22,7 @@ require(!hasReleaseSigning || releaseSigningValues.all { !it.isNullOrBlank() }) 
 android {
     namespace = "guide.guidelabs.codexdrop"
     compileSdk = 37
-    defaultConfig { applicationId = "guide.guidelabs.codexdrop"; minSdk = 28; targetSdk = 37; versionCode = 3; versionName = "1.0"; testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner" }
+    defaultConfig { applicationId = "guide.guidelabs.codexdrop"; minSdk = 28; targetSdk = 37; versionCode = 5; versionName = "1.0"; testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner" }
     if (hasReleaseSigning) {
         val persistentRelease = signingConfigs.create("persistentRelease") {
             // Relative paths resolve from android/, alongside local.properties.

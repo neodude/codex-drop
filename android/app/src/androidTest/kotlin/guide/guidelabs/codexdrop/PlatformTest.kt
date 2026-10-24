@@ -47,14 +47,20 @@ class PlatformTest {
             assertThrows(DropFailure::class.java) { runBlocking { store.find("../pairing") } }
         } finally { folder.deleteRecursively() }
     }
-    @Test fun imageReadingIsBoundedAndConvertsToPng(): Unit = runBlocking {
-        val preparer = ImagePreparer(context.contentResolver)
+    @Test fun imageReadingIsBoundedAndKeepsOriginalBytes(): Unit = runBlocking {
+        val preparer = ImagePreparer(context.contentResolver, File(context.cacheDir, "test-image-preparation"))
         val tiny = Uri.parse("content://guide.guidelabs.codexdrop.test.images/tiny.png")
         val original = context.contentResolver.openInputStream(tiny)!!.use { it.readBytes() }
         assertArrayEquals(original, preparer.prepare(tiny))
-        val jpeg = preparer.prepare(Uri.parse("content://guide.guidelabs.codexdrop.test.images/tiny.jpg"))
-        assertArrayEquals(byteArrayOf(-119,80,78,71,13,10,26,10), jpeg.copyOf(8))
-        for (path in listOf("too-large", "not-image", "too-many-pixels.png", "missing", "denied")) {
+        val jpegUri = Uri.parse("content://guide.guidelabs.codexdrop.test.images/tiny.jpg")
+        val jpegOriginal = context.contentResolver.openInputStream(jpegUri)!!.use { it.readBytes() }
+        assertArrayEquals(jpegOriginal, preparer.prepare(jpegUri))
+        for (path in listOf("not-image", "too-many-pixels.png")) {
+            val source = Uri.parse("content://guide.guidelabs.codexdrop.test.images/$path")
+            val bytes = context.contentResolver.openInputStream(source)!!.use { it.readBytes() }
+            assertArrayEquals(bytes, preparer.prepare(source)) // Receiver validates format and dimensions.
+        }
+        for (path in listOf("too-large", "missing", "denied")) {
             assertThrows(DropFailure::class.java) { runBlocking { preparer.prepare(Uri.parse("content://guide.guidelabs.codexdrop.test.images/$path")) } }
         }
         assertThrows(DropFailure::class.java) { runBlocking { preparer.prepare(Uri.parse("file:///etc/passwd")) } }

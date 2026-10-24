@@ -21,7 +21,9 @@ import time
 import uuid
 import zlib
 
-MAX_IMAGE = 20 * 1024 * 1024
+MAX_IMAGE = 50 * 1024 * 1024
+UNSUPPORTED_HEIC_MESSAGE = ("Codex does not accept HEIC/HEIF as image inputs. Share a JPEG, PNG, GIF or WebP instead. "
+                            "In Photos, use Automatic or Most Compatible.")
 MAX_BATCH = 100 * 1024 * 1024
 MAX_BATCH_COUNT = 10
 NATIVE_TIMEOUT = 240
@@ -34,12 +36,16 @@ class Conflict(Exception):
 
 
 class InvalidImage(ValueError):
-    pass
+    def __init__(self, message, reason="invalid_png"):
+        super().__init__(message)
+        self.reason = reason
 
 
 def validate_png(data):
-    if not 33 <= len(data) <= MAX_IMAGE or data[:8] != b"\x89PNG\r\n\x1a\n":
-        raise InvalidImage("Expected a PNG no larger than 20 MiB")
+    if len(data) > MAX_IMAGE:
+        raise InvalidImage("PNG exceeds the 50 MiB limit", "image_size_limit")
+    if len(data) < 33 or data[:8] != b"\x89PNG\r\n\x1a\n":
+        raise InvalidImage("Expected a valid PNG")
     offset, dimensions, saw_data, ended = 8, None, False, False
     while offset + 12 <= len(data):
         length, = struct.unpack_from(">I", data, offset)
@@ -55,8 +61,8 @@ def validate_png(data):
             if kind != b"IHDR" or length != 13:
                 raise InvalidImage("Missing PNG header")
             width, height, _, _, compression, filtering, interlace = struct.unpack(">IIBBBBB", payload)
-            if not width or not height or width > 10000 or height > 10000 or width * height > 40_000_000:
-                raise InvalidImage("PNG dimensions exceed limit")
+            if not width or not height:
+                raise InvalidImage("PNG dimensions must be positive")
             if compression or filtering or interlace not in (0, 1):
                 raise InvalidImage("Unsupported PNG encoding")
             dimensions = width, height
@@ -73,6 +79,84 @@ def validate_png(data):
     if not ended:
         raise InvalidImage("Incomplete PNG")
     return dimensions
+
+
+def validate_image(data):
+    """Check the original file envelope, never decode or change its bytes.
+
+    Native preflight determines actual codec support. Geometry is not a transfer
+    limit because staging an original file does not allocate a decoded bitmap.
+    """
+    if len(data) > MAX_IMAGE:
+        raise InvalidImage("Image exceeds the 50 MiB limit", "image_size_limit")
+    def malformed():
+        raise InvalidImage("Malformed or incomplete image file", "invalid_image")
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        validate_png(data)
+        return "png"
+    if data.startswith(b"\xff\xd8"):
+        # Skip length-prefixed metadata without inspecting EXIF/XMP/ICC content.
+        offset, saw_frame = 2, False
+        while offset < len(data):
+            if data[offset] != 0xff: malformed()
+            while offset < len(data) and data[offset] == 0xff: offset += 1
+            if offset >= len(data): malformed()
+            marker = data[offset]; offset += 1
+            if marker in (0x00, 0xd8, 0xd9): malformed()
+            if marker == 0x01 or 0xd0 <= marker <= 0xd7: continue
+            if offset + 2 > len(data): malformed()
+            size = int.from_bytes(data[offset:offset+2], "big")
+            if size < 2 or offset + size > len(data): malformed()
+            if marker in (0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf):
+                if size < 8: malformed()
+                components = data[offset+7]
+                if not 1 <= components <= 4 or size != 8 + 3 * components: malformed()
+                if not int.from_bytes(data[offset+3:offset+5], "big") or not int.from_bytes(data[offset+5:offset+7], "big"): malformed()
+                saw_frame = True
+            if marker == 0xda:
+                if not saw_frame or size < 6 or data.rfind(b"\xff\xd9", offset + size) < 0: malformed()
+                return "jpg"
+            offset += size
+        malformed()
+    if data.startswith((b"GIF87a", b"GIF89a")):
+        if len(data) < 14 or not data.endswith(b";") or not int.from_bytes(data[6:8], "little") or not int.from_bytes(data[8:10], "little"): malformed()
+        table_end = 13 + (3 * (1 << ((data[10] & 7) + 1)) if data[10] & 0x80 else 0)
+        if table_end >= len(data) - 1 or data.find(b",", table_end, len(data)-1) < 0: malformed()
+        return "gif"
+    if data.startswith(b"RIFF") and data[8:12] == b"WEBP":
+        if len(data) < 20 or int.from_bytes(data[4:8], "little") + 8 != len(data): malformed()
+        offset, saw_image = 12, False
+        while offset + 8 <= len(data):
+            kind, size = data[offset:offset+4], int.from_bytes(data[offset+4:offset+8], "little")
+            end = offset + 8 + size
+            if end + (size & 1) > len(data): malformed()
+            if kind == b"VP8 ":
+                if size < 10 or data[offset+11:offset+14] != b"\x9d\x01\x2a": malformed()
+                saw_image = True
+            elif kind == b"VP8L":
+                if size < 5 or data[offset+8] != 0x2f: malformed()
+                saw_image = True
+            elif kind == b"ANMF":
+                if size < 24: malformed()
+                saw_image = True
+            offset = end + (size & 1)
+        if offset != len(data) or not saw_image: malformed()
+        return "webp"
+    if len(data) >= 16 and data[4:8] == b"ftyp":
+        # Recognize HEIC/HEIF only to refuse it. Never queue it as a generic file
+        # or convert it into one of Codex's four supported image input formats.
+        size, header = int.from_bytes(data[:4], "big"), 8
+        if size == 1:
+            if len(data) < 24: malformed()
+            size, header = int.from_bytes(data[8:16], "big"), 16
+        elif size == 0: size = len(data)
+        if size < header + 8 or size > len(data) or (size-header) % 4: malformed()
+        brands = {data[header:header+4]}
+        brands.update(data[index:index+4] for index in range(header+8, min(size, header+4096), 4))
+        if not brands & {b"avif", b"avis"} and brands & {b"heic", b"heix", b"hevc", b"hevx", b"mif1", b"msf1"}:
+            raise InvalidImage(UNSUPPORTED_HEIC_MESSAGE, "unsupported_image_format")
+    raise InvalidImage("Unsupported image format; use PNG, JPEG, GIF or WebP", "unsupported_image_format")
+
 
 
 class JobQueue:
@@ -165,9 +249,9 @@ class JobQueue:
                 if db.execute("SELECT 1 FROM batches WHERE id=?", (key,)).fetchone() or previous["sha256"] != digest:
                     raise Conflict("Request ID already belongs to different bytes")
                 return self.public(previous)
-            validate_png(data)
+            suffix = validate_image(data)
             self.check_capacity(db)
-            image = self.persist_image(key + ".png", data)
+            image = self.persist_image(key + "." + suffix, data)
             now = time.time()
             try:
                 db.execute("INSERT INTO jobs (id,sha256,image,state,result,created,updated) VALUES (?,?,?,?,?,?,?)",
@@ -213,11 +297,11 @@ class JobQueue:
                 return self.public(db.execute("SELECT * FROM jobs WHERE id=?", (key,)).fetchone())
             if batch["state"] != "uploading":
                 raise Conflict("Batch is already committed")
-            validate_png(data)
+            suffix = validate_image(data)
             total = db.execute("SELECT coalesce(sum(size),0) FROM batch_images WHERE batch_id=?", (key,)).fetchone()[0]
             if total + len(data) > MAX_BATCH:
                 raise Conflict("Batch total exceeds 100 MiB")
-            image = self.persist_image(f"{key}-{index}.png", data)
+            image = self.persist_image(f"{key}-{index}.{suffix}", data)
             try:
                 db.execute("INSERT INTO batch_images (batch_id,image_index,path,sha256,size) VALUES (?,?,?,?,?)",
                            (key,index,str(image),digest,len(data)))
@@ -243,7 +327,10 @@ class JobQueue:
                     data = Path(item["path"]).read_bytes()
                     if len(data) != item["size"] or hashlib.sha256(data).hexdigest() != item["sha256"]:
                         raise ValueError("Staged image changed")
-                    validate_png(data)
+                    validate_image(data)
+            except InvalidImage as error:
+                if error.reason == "unsupported_image_format": raise
+                raise Conflict("Staged image validation failed") from None
             except (OSError, ValueError):
                 raise Conflict("Staged image validation failed") from None
             digest = hashlib.sha256(json.dumps([item["sha256"] for item in images]).encode()).hexdigest()
@@ -325,7 +412,7 @@ class JobQueue:
         removed = failures = 0
         # Names are derived from our UUID IDs, not paths supplied by a queue row.
         uuid_pattern = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
-        pattern = re.compile(rf"({uuid_pattern})(?:-[0-9])?(?:\.png|\.result\.json|\.result\.manifest\.json|(?P<temporary>\.tmp-{uuid_pattern}))")
+        pattern = re.compile(rf"({uuid_pattern})(?:-[0-9])?(?:\.(?:png|jpg|jpeg|gif|webp|heic|heif)|\.result\.json|\.result\.manifest\.json|(?P<temporary>\.tmp-{uuid_pattern}))")
         images = self.directory / "images"
         if images.is_symlink(): raise ValueError("Unsafe screenshot directory")
         for path in images.iterdir():
@@ -509,10 +596,15 @@ def native_delivery(job, test_arguments=(), live_output=False):
         try:
             for image in images:
                 data = Path(image["path"]).read_bytes()
-                validate_png(data)
                 total += len(data)
                 if hashlib.sha256(data).hexdigest() != image["sha256"] or total > MAX_BATCH:
                     raise ValueError("Changed batch image")
+                validate_image(data)
+        except InvalidImage as error:
+            if error.reason == "unsupported_image_format":
+                return {"status": "blocked", "pasteAttempted": False, "reason": error.reason,
+                        "diagnostics": {"recovery": str(error)}}
+            return {"status": "blocked", "pasteAttempted": False, "reason": "queued_image_checksum_changed"}
         except (OSError, ValueError):
             return {"status": "blocked", "pasteAttempted": False, "reason": "queued_image_checksum_changed"}
         manifest_path = result_path.with_suffix(".manifest.json")
@@ -532,7 +624,8 @@ def native_delivery(job, test_arguments=(), live_output=False):
             return {"status": "blocked", "pasteAttempted": False, "reason": "queued_image_checksum_changed"}
         arguments = ["--image", job["image"]]
     result_path.unlink(missing_ok=True)
-    process = subprocess.Popen([str(executable), *arguments, "--result", str(result_path), *test_arguments],
+    checksum_arguments = ["--expected-sha256", job["sha256"]] if images is None else []
+    process = subprocess.Popen([str(executable), *arguments, "--result", str(result_path), *checksum_arguments, *test_arguments],
                                stdout=None if live_output else subprocess.DEVNULL,
                                stderr=None if live_output else subprocess.DEVNULL)
     try:
@@ -655,12 +748,14 @@ def make_server(queue, token, port=0, *, bind_host="127.0.0.1", persistent_conne
             length = self.content_length(required=True)
             if length is None:
                 return
-            content = "image/png" if is_image else "application/json"
-            if self.headers.get("Content-Type") != content:
+            content_types = ("application/octet-stream", "image/png") if is_image else ("application/json",)
+            if self.headers.get("Content-Type") not in content_types:
                 self.reject(415, "unexpected_content_type")
                 return
-            if not (33 <= length <= MAX_IMAGE if is_image else 2 <= length <= 1024):
-                self.reject(413, "image_size_limit" if is_image else "json_size_limit")
+            if not (12 <= length <= MAX_IMAGE if is_image else 2 <= length <= 1024):
+                self.close_connection = True
+                self.reply(413, {"error": "image_size_limit" if is_image else "json_size_limit",
+                                 "message": "Image must be between 12 bytes and 50 MiB" if is_image else "JSON exceeds size limit"})
                 return
             try:
                 data = self.rfile.read(length)
@@ -699,7 +794,9 @@ def make_server(queue, token, port=0, *, bind_host="127.0.0.1", persistent_conne
                            {"received": True, "job": job})
             except Conflict:
                 self.reply(409, {"error": "request_conflict_or_queue_full"})
-            except (ValueError, InvalidImage):
+            except InvalidImage as error:
+                self.reply(400, {"error": error.reason, "message": str(error)})
+            except ValueError:
                 self.reply(400, {"error": "invalid_image_or_request_id"})
             except OSError:
                 self.reply(503, {"error": "storage_unavailable"})

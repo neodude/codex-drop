@@ -1,6 +1,25 @@
 import Foundation
 import CoreFoundation
 
+// Limits apply to original encoded files. Metadata checks never decode pixels.
+enum ImageLimits {
+    static let maxBytes = 50 * 1024 * 1024
+    static let maxBatchBytes = 100 * 1024 * 1024
+    static let maxBatchCount = 10
+}
+
+enum OriginalImageType: String {
+    case png, jpeg, gif, webp
+    var fileExtension: String { self == .jpeg ? "jpg" : rawValue }
+    static let supportedExtensions: Set<String> = ["png", "jpg", "jpeg", "gif", "webp"]
+}
+
+struct OriginalImage {
+    let data: Data
+    let fileURL: URL
+    let type: OriginalImageType
+}
+
 // Only the empty-document decoration from Codex's editor may be excluded.
 // Typed text, including words identical to a hint, retains its exact bytes.
 struct DraftAXNode {
@@ -130,17 +149,17 @@ protocol DeliveryAdapter: AnyObject {
     var clipboardRead: Bool? { get }
     func observe() throws -> ComposerSnapshot
     func prepare() throws
-    func stage(_ png: Data) throws
+    func stage(_ image: OriginalImage) throws
     func paste() throws
     func restore() -> String
     func wait(_ interval: TimeInterval)
 }
 
 enum DeliveryEngine {
-    static func runBatch(images: [Data], adapter: DeliveryAdapter, timeout: TimeInterval = 8,
+    static func runBatch(images: [OriginalImage], adapter: DeliveryAdapter, timeout: TimeInterval = 8,
                          willPaste: (Int) throws -> Void = { _ in }) -> DeliveryResult {
         let started = adapter.now
-        guard (1...10).contains(images.count), images.reduce(0, { $0 + $1.count }) <= 100 * 1024 * 1024 else {
+        guard (1...ImageLimits.maxBatchCount).contains(images.count), images.reduce(0, { $0 + $1.data.count }) <= ImageLimits.maxBatchBytes else {
             return DeliveryResult(status: "blocked", reason: "invalid_batch", pasteAttempted: false,
                                   elapsedMS: 0, items: [], verifiedCount: 0, totalCount: images.count)
         }
@@ -192,7 +211,7 @@ enum DeliveryEngine {
                 "removedBytes": String(removed.count), "insertedBytes": String(inserted.count),
                 "removedKind": kind(removed), "insertedKind": kind(inserted)]
     }
-    static func run(image: Data, adapter: DeliveryAdapter, timeout: TimeInterval = 8,
+    static func run(image: OriginalImage, adapter: DeliveryAdapter, timeout: TimeInterval = 8,
                     willPaste: () throws -> Void = {}) -> DeliveryResult {
         let started = adapter.now
         var staged = false, attempted = false
@@ -245,11 +264,11 @@ enum DeliveryEngine {
                     return outcome("uncertain", "existing_attachment_disappeared")
                 }
                 let added = current.attachments.reduce(0) { $0 + max(0, $1.value - before.attachments[$1.key, default: 0]) }
-                let addedPNG = current.attachments.reduce(0) {
-                    $0 + ($1.key.lowercased().hasSuffix(".png") ? max(0, $1.value - before.attachments[$1.key, default: 0]) : 0)
+                let addedImages = current.attachments.reduce(0) {
+                    $0 + (OriginalImageType.supportedExtensions.contains(URL(fileURLWithPath: $1.key).pathExtension.lowercased()) ? max(0, $1.value - before.attachments[$1.key, default: 0]) : 0)
                 }
                 guard added <= 1 else { return outcome("uncertain", "unexpected_multiple_attachments") }
-                stableSamples = added == 1 && addedPNG == 1 ? stableSamples + 1 : 0
+                stableSamples = added == 1 && addedImages == 1 ? stableSamples + 1 : 0
                 if stableSamples >= 2 { return outcome("verified", "attachment_observed") }
                 adapter.wait(0.1)
             }
@@ -296,7 +315,7 @@ private final class BatchBoundAdapter: DeliveryAdapter {
         return current
     }
     func prepare() throws { try base.prepare() }
-    func stage(_ png: Data) throws { try base.stage(png) }
+    func stage(_ image: OriginalImage) throws { try base.stage(image) }
     func paste() throws { try base.paste() }
     func restore() -> String { base.restore() }
     func wait(_ interval: TimeInterval) { base.wait(interval) }
