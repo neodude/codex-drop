@@ -18,10 +18,12 @@ class EmulatorFixtureProvider : ContentProvider() {
         val app = context?.applicationContext as? DropApplication ?: return true
         val file = File(app.noBackupFilesDir,"emulator-fixture.json")
         if (!file.isFile || file.length() !in 2..128) return true
-        val port = runCatching { JSONObject(file.readText()).getInt("port") }.getOrNull() ?: return true
-        if (port !in 1..65535) return true
+        val fixture = runCatching { JSONObject(file.readText()) }.getOrNull() ?: return true
+        val port = fixture.optInt("port")
+        val host = fixture.optString("host", "10.0.2.2")
+        if (port !in 1..65535 || host !in setOf("10.0.2.2", "127.0.0.1")) return true
         app.repositoryOverride = DropRepository(app, ReceiverDiscovery {
-            Endpoint(listOf(InetAddress.getByName("10.0.2.2")),port)
+            Endpoint(listOf(InetAddress.getByName(host)),port)
         })
         return true
     }

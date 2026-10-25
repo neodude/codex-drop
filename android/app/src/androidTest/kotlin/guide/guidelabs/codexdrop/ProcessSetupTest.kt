@@ -20,8 +20,8 @@ class ProcessSetupTest {
         val context = instrumentation.targetContext
         val fixture = JSONObject(InstrumentationRegistry.getArguments().getString("fixture")!!)
         if (Build.VERSION.SDK_INT >= 37) instrumentation.uiAutomation.grantRuntimePermission(context.packageName,LAN_PERMISSION)
-        File(context.noBackupFilesDir,"emulator-fixture.json").writeText(JSONObject().put("port",fixture.getInt("port")).toString())
-        val repository = DropRepository(context,ReceiverDiscovery { Endpoint(listOf(InetAddress.getByName("10.0.2.2")),fixture.getInt("port")) })
+        File(context.noBackupFilesDir,"emulator-fixture.json").writeText(JSONObject().put("port",fixture.getInt("port")).put("host",fixture.optString("host", "10.0.2.2")).toString())
+        val repository = DropRepository(context,ReceiverDiscovery { Endpoint(listOf(InetAddress.getByName(fixture.optString("host", "10.0.2.2"))),fixture.getInt("port")) })
         repository.pair(fixture.getString("pairing"))
     }
 }

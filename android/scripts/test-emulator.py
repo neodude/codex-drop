@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Emulator-only fixture checks. Never use the real Mac receiver or a phone."""
 import argparse
+import json
 import os
 import re
 import subprocess
@@ -9,6 +10,7 @@ from pathlib import Path
 
 root = Path(__file__).resolve().parents[2]
 parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('--adb-reverse', action='store_true', help='Use an emulator-only localhost tunnel; does not validate the emulator LAN route.')
 parser.add_argument('--serial', default='emulator-5580')
 parser.add_argument('--adb', default=str(Path.home() / 'Library/Android/sdk/platform-tools/adb'))
 args = parser.parse_args()
@@ -16,7 +18,7 @@ if not re.fullmatch(r'emulator-[0-9]+', args.serial):
     sys.exit('Refusing a physical device: use an emulator serial.')
 
 def adb(*command, **kwargs):
-    return subprocess.run([args.adb, '-s', args.serial, *command], check=True, **kwargs)
+    return subprocess.run([args.adb, '-s', args.serial, *command], check=kwargs.pop('check', True), **kwargs)
 
 if adb('shell', 'getprop', 'ro.kernel.qemu', capture_output=True, text=True).stdout.strip() != '1':
     sys.exit('Refusing a device that is not an emulator.')
@@ -30,10 +32,18 @@ for apk, extra in [('app-debug.apk', []), ('app-debug-androidTest.apk', ['-t'])]
 font = adb('shell', 'settings', 'get', 'system', 'font_scale', capture_output=True, text=True).stdout.strip()
 with (logs / 'fixture-stderr.log').open('w') as errors:
     fixture = subprocess.Popen([sys.executable, str(root / 'android/core/src/test/resources/receiver_fixture.py'), str(root)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=errors, text=True, env={**os.environ, 'CODEX_DROP_FIXTURE_DELAY': '2'})
+    reverse_port = None
     try:
-        config = fixture.stdout.readline().strip()
-        if not config:
+        line = fixture.stdout.readline().strip()
+        if not line:
             raise RuntimeError('Fixture failed to start. See fixture-stderr.log.')
+        config = json.loads(line)
+        if args.adb_reverse:
+            port = 'tcp:' + str(config['port'])
+            adb('reverse', '--no-rebind', port, port, capture_output=True)
+            reverse_port = port
+            config['host'] = '127.0.0.1'
+        config = json.dumps(config, separators=(',', ':'))
         adb('shell', 'settings', 'put', 'system', 'font_scale', '1.5', capture_output=True)
         # Only ephemeral, disposable fixture credentials; never print the argument.
         with (logs / 'platform-flow-tests.log').open('w') as output:
@@ -48,6 +58,8 @@ with (logs / 'fixture-stderr.log').open('w') as errors:
             (logs / name).write_bytes(image)
         print('PASS: 6 emulator checks, including 3-image pinned HTTPS round trip. Screenshots saved.')
     finally:
+        if reverse_port is not None:
+            adb('reverse', '--remove', reverse_port, capture_output=True, check=False)
         adb('shell', 'settings', 'put', 'system', 'font_scale', font if font and font != 'null' else '1.0', capture_output=True)
         if fixture.poll() is None:
             fixture.stdin.write('stop\n'); fixture.stdin.flush(); fixture.stdin.close()

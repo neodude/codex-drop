@@ -26,6 +26,7 @@ final class FixtureDelegate: NSObject, NSApplicationDelegate {
     var editor: NSTextView!
     var stack: NSStackView!
     var otherWindow: NSWindow?
+    var otherEditor: NSTextView?
     var searchField: NSTextField!
     var extraComposer: NSStackView?
     var configuration: [String: String] = [:]
@@ -100,9 +101,7 @@ final class FixtureDelegate: NSObject, NSApplicationDelegate {
             board.clearContents(); board.setString("newer fixture clipboard", forType: .string)
         }
         if mode == "window-change" {
-            otherWindow = NSWindow(contentRect: NSRect(x: 400, y: 400, width: 360, height: 200), styleMask: [.titled, .closable], backing: .buffered, defer: false)
-            otherWindow?.isReleasedWhenClosed = false; otherWindow?.animationBehavior = .none
-            otherWindow?.title = "Other fixture window"; otherWindow?.makeKeyAndOrderFront(nil)
+            showOtherWindow(makeKey: true)
         }
         if mode == "no-ack" || mode == "clipboard-change" || mode == "window-change" || (mode == "batch-uncertain" && pasteCount == 2) { writeReport(); return }
         let delay: TimeInterval = mode == "delayed" ? 3.5 : 0
@@ -128,6 +127,26 @@ final class FixtureDelegate: NSObject, NSApplicationDelegate {
         writeReport()
     }
 
+    private func showOtherWindow(makeKey: Bool) {
+        let other = NSWindow(contentRect: NSRect(x: 400, y: 400, width: 360, height: 220),
+                             styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        other.isReleasedWhenClosed = false; other.animationBehavior = .none
+        other.title = "Other fixture window"
+        let group = NSStackView(frame: NSRect(x: 20, y: 20, width: 320, height: 180))
+        group.orientation = .vertical
+        group.setAccessibilityElement(true); group.setAccessibilityRole(.group)
+        let marker = NSButton(title: "Add files and more", target: nil, action: nil)
+        marker.setAccessibilityLabel("Add files and more"); group.addArrangedSubview(marker)
+        let alternate = NSTextView(frame: NSRect(x: 0, y: 0, width: 300, height: 100))
+        alternate.isRichText = false; alternate.string = "Other fixture draft"
+        alternate.heightAnchor.constraint(equalToConstant: 100).isActive = true
+        alternate.widthAnchor.constraint(equalToConstant: 300).isActive = true
+        group.addArrangedSubview(alternate); other.contentView?.addSubview(group)
+        otherWindow = other; otherEditor = alternate
+        if makeKey { other.makeKeyAndOrderFront(nil); other.makeFirstResponder(alternate) }
+        else { other.orderFront(nil) }
+    }
+
     func refreshAndReport() {
         let now = Date()
         maxHeartbeatGapMS = max(maxHeartbeatGapMS, Int(now.timeIntervalSince(lastHeartbeat) * 1000))
@@ -140,7 +159,7 @@ final class FixtureDelegate: NSObject, NSApplicationDelegate {
             configuration = next
             pasteCount = 0; attachmentCount = 0; maxHeartbeatGapMS = 0; started = now
             for view in stack.arrangedSubviews.dropFirst(3) { stack.removeArrangedSubview(view); view.removeFromSuperview() }
-            otherWindow?.close(); otherWindow = nil
+            otherWindow?.close(); otherWindow = nil; otherEditor = nil
             extraComposer?.removeFromSuperview(); extraComposer = nil
             editor.string = "Existing fixture draft\nsecond line 🧗"
             board.clearContents(); board.setString("fixture original clipboard", forType: .string)
@@ -150,6 +169,11 @@ final class FixtureDelegate: NSObject, NSApplicationDelegate {
             hideApplicationFocus = mode == "background-focus" || mode == "background-focus-change"
             if mode == "selected-text" || mode == "unfocused-selected" { editor.setSelectedRange(NSRange(location: 0, length: 5)) }
             if mode.hasPrefix("unfocused") || mode.hasPrefix("background-focus") || mode == "ambiguous" { window.makeFirstResponder(searchField) }
+            if mode.hasPrefix("two-window-") {
+                showOtherWindow(makeKey: false)
+                window.makeKeyAndOrderFront(nil); window.makeFirstResponder(editor)
+                if mode == "two-window-activation" { NSApp.hide(nil) }
+            }
             if mode == "ambiguous" {
                 let group = NSStackView(); group.orientation = .vertical
                 group.setAccessibilityElement(true); group.setAccessibilityRole(.group)
@@ -163,6 +187,10 @@ final class FixtureDelegate: NSObject, NSApplicationDelegate {
                 window.contentView?.addSubview(group); extraComposer = group
             }
         }
+        if configuration["mode"] == "window-before-paste", otherWindow == nil,
+           board.types?.contains(.fileURL) == true {
+            showOtherWindow(makeKey: true)
+        }
         writeReport()
     }
 
@@ -174,6 +202,8 @@ final class FixtureDelegate: NSObject, NSApplicationDelegate {
                                    "maxHeartbeatGapMS": maxHeartbeatGapMS,
                                    "composerFocused": window.firstResponder === editor,
                                    "appActive": NSApp.isActive,
+                                   "windowCount": NSApp.windows.filter { $0 === window || $0 === otherWindow }.count,
+                                   "otherDraftUnchanged": otherEditor?.string == "Other fixture draft",
                                    "clipboardIsOriginal": board.string(forType: .string) == "fixture original clipboard",
                                    "clipboardIsNewer": board.string(forType: .string) == "newer fixture clipboard"]
         if let data = try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]) { try? data.write(to: reportURL, options: .atomic) }

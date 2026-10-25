@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[2]
 PKG = 'guide.guidelabs.codexdrop'
 RUNNER = PKG + '.test/androidx.test.runner.AndroidJUnitRunner'
 parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('--adb-reverse', action='store_true', help='Use an emulator-only localhost tunnel; does not validate the emulator LAN route.')
 parser.add_argument('--serial', default='emulator-5580')
 parser.add_argument('--adb', default=str(Path.home() / 'Library/Android/sdk/platform-tools/adb'))
 parser.add_argument('--groups', default='base,cleanup,lifecycle,stress,discovery,denied,partial,blocked,upload,commit,confirm,process-precommit,process-postcommit,process-revoke')
@@ -35,11 +36,19 @@ def fixture(name, mode='verified', delay=2):
     audit = OUT / (name+'-audit.json')
     with (OUT/(name+'-server.log')).open('w') as error:
         process = subprocess.Popen([sys.executable,str(ROOT/'android/core/src/test/resources/receiver_fixture.py'),str(ROOT)],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=error,text=True,env={**os.environ,'CODEX_DROP_FIXTURE_MODE':mode,'CODEX_DROP_FIXTURE_DELAY':str(delay),'CODEX_DROP_FIXTURE_AUDIT':str(audit)})
+        reverse_port = None
         try:
             line = process.stdout.readline()
             if not line: raise RuntimeError('Fixture failed: '+name)
-            yield json.loads(line)
+            config = json.loads(line)
+            if args.adb_reverse:
+                port = 'tcp:' + str(config['port'])
+                adb('reverse', '--no-rebind', port, port)
+                reverse_port = port
+                config['host'] = '127.0.0.1'
+            yield config
         finally:
+            if reverse_port is not None: adb('reverse', '--remove', reverse_port, check=False)
             if process.poll() is None:
                 process.stdin.write('stop\n');process.stdin.flush();process.stdin.close()
                 try: process.wait(timeout=12)
@@ -203,5 +212,5 @@ try:
 finally:
     adb('shell','settings','put','system','font_scale',font if font and font!='null' else '1.0',check=False)
     if api>=37: adb('shell','pm','grant',PKG,'android.permission.ACCESS_LOCAL_NETWORK',check=False)
-    (OUT/'results.json').write_text(json.dumps({'api':api,'serial':args.serial,'results':results},indent=2)+'\n')
+    (OUT/'results.json').write_text(json.dumps({'api':api,'serial':args.serial,'transport':'adb-reverse' if args.adb_reverse else 'emulator-host','results':results},indent=2)+'\n')
 print('PASS: all requested emulator hardening groups; evidence '+str(OUT))

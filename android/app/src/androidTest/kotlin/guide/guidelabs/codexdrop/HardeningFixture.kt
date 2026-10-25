@@ -42,7 +42,7 @@ abstract class HardeningFixture {
         if (::repository.isInitialized) repository.forget()
         (context.applicationContext as DropApplication).repositoryOverride = null
     }
-    fun endpoint() = Endpoint(listOf(InetAddress.getByName("10.0.2.2")),config.getInt("port"))
+    fun endpoint() = Endpoint(listOf(InetAddress.getByName(config.optString("host", "10.0.2.2"))),config.getInt("port"))
     fun launch(count: Int = 3, source: String = "tiny.png"): Pair<ActivityScenario<ShareActivity>,ShareViewModel> {
         val uris = ArrayList((0 until count).map { Uri.parse("content://guide.guidelabs.codexdrop.test.images/$source") })
         val intent = Intent(context,ShareActivity::class.java).setAction(if (count == 1) Intent.ACTION_SEND else Intent.ACTION_SEND_MULTIPLE).setType("image/png").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)

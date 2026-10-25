@@ -43,7 +43,7 @@ class FlowTest {
         val fixture = JSONObject(raw!!)
         if (Build.VERSION.SDK_INT >= 37) instrumentation.uiAutomation.grantRuntimePermission(context.packageName,LAN_PERMISSION)
         val application = context.applicationContext as DropApplication
-        val repository = DropRepository(context, ReceiverDiscovery { Endpoint(listOf(InetAddress.getByName("10.0.2.2")),fixture.getInt("port")) })
+        val repository = DropRepository(context, ReceiverDiscovery { Endpoint(listOf(InetAddress.getByName(fixture.optString("host", "10.0.2.2"))),fixture.getInt("port")) })
         application.repositoryOverride = repository
         var scenario: ActivityScenario<ShareActivity>? = null
         try {

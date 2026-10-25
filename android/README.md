@@ -76,6 +76,8 @@ python3 android/scripts/harden-emulator.py --serial emulator-5580
 
 Start a disposable emulator first and use its actual serial. Both Python runners reject physical devices. They use isolated receiver state and fake attachment delivery; they do not paste into Codex. The hardening runner supports `--groups`; API-specific permission cases are skipped where inapplicable. Logs, screenshots, and delivery audits are saved under ignored `.codex-artifacts/`.
 
-Historical API 30/37 emulator checks and API 36 physical shares passed on preceding builds, including real QR pairing, discovery, batches, background/unfocused Codex with a preserved draft, and screenshot-preview sharing. Those results do not validate this build's changed application identity. Fresh device checks are still needed. API 28–29 and 31–35 remain unrun; see [validation gaps](../docs/development.md#validation-and-known-gaps).
+If the emulator's `10.0.2.2` host route stalls, either runner accepts `--adb-reverse` to use a disposable localhost tunnel. It preserves pinned HTTPS and removes only its own port mapping afterward. This mode verifies client/protocol and lifecycle behavior but does not exercise the emulator LAN route or Android's network-layer Local Network permission enforcement.
+
+Automated checks and manual acceptance are separate. Keep exact device, build, toolchain, sample and execution records in ignored local artifacts; publish only generic coverage and known limitations.
 
 Image transfers use paired local HTTPS. QR pairing uses Google Play services code scanning; its module may download before first use, and Google documents SDK performance/utilization metrics. See [behavior and privacy](../docs/behavior-and-privacy.md) for that dependency, metadata, clipboard use and storage.
