@@ -8,8 +8,8 @@ From the repository root on a Mac with the documented Apple toolchain:
 
 ```sh
 python3 -m unittest discover -s scripts -p 'test_*.py'
-./run-tests.command
-./run-iphone-checks.command
+./scripts/test-receiver.zsh
+./scripts/test-iphone.zsh
 ./scripts/test-macos.zsh
 ```
 
@@ -25,7 +25,9 @@ Android build/unit/lint and disposable-emulator commands are in the [Android gui
 
 ## Interactive diagnostics
 
-Root `.command` launchers other than the standard isolated checks are developer tools. Several start listeners, open fixture apps, inspect Accessibility, manipulate a pasteboard, or deliberately attempt live attachment. Read the launcher and its referenced source before running it. Never point fixtures at the normal runtime store; use an explicit temporary `--data-dir` where supported. Stop a Terminal receiver before starting the packaged app.
+The optional UI runner, `./scripts/test-receiver-ui.zsh`, opens an isolated AppKit fixture and uses a private pasteboard. It does not target Codex.
+
+Build the native helper with `zsh receiver/build.zsh` and inspect `./MacAttachmentReceiver --help` for diagnostic modes. Live attachment checks are available directly through `receiver/live_test.py`. These developer tools can inspect Accessibility, change focus, manipulate the clipboard or attempt an attachment. Read the relevant source before running them. Never point fixtures at the normal runtime store; use an explicit temporary `--data-dir` where supported. Stop a Terminal receiver before starting the packaged app.
 
 Keep detailed logs and captures in ignored `.codex-artifacts/`. Do not commit QR codes, credentials, device identifiers, personal screenshots, private draft text, or signing/provisioning material. Synthetic protocol fixtures and required third-party notices belong in source control.
 

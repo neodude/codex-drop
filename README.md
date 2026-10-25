@@ -119,7 +119,7 @@ Known Accessibility-window acquisition refusals remain under investigation. The 
 
 ## Development and license
 
-See [development and verification](docs/development.md), [architecture](docs/architecture.md), and [roadmap](docs/roadmap.md). Some legacy `.command` tools perform real Accessibility/clipboard interactions; they are developer diagnostics, not ordinary setup steps.
+See [development and verification](docs/development.md), [architecture](docs/architecture.md), and [roadmap](docs/roadmap.md). Maintained build and verification entrypoints live in `scripts/`; developer diagnostics are described in the verification guide.
 
 Original code is licensed under [MIT](LICENSE), copyright 2026 Thomas Bukowski. Third-party dependencies and assets retain their own licenses and notices; the project license does not relicense third-party marks. Codex and OpenAI names identify the integration target.
 

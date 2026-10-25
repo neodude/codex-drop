@@ -1,6 +1,6 @@
 #!/bin/zsh
 set -eu
-RECEIVER_ROOT=${0:A:h}
+RECEIVER_ROOT=${0:A:h:h}
 cd "$RECEIVER_ROOT"
 mkdir -p "$RECEIVER_ROOT/.codex-artifacts/checks"
 zsh "$RECEIVER_ROOT/receiver/build.zsh"

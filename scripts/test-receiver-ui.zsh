@@ -1,6 +1,6 @@
 #!/bin/zsh
 set -eu
-RECEIVER_ROOT=${0:A:h}
+RECEIVER_ROOT=${0:A:h:h}
 cd "$RECEIVER_ROOT"
 if /usr/bin/pgrep -x ReceiverFixture >/dev/null; then
   print -u2 'Quit Receiver Fixture before rebuilding it, then rerun this test launcher.'

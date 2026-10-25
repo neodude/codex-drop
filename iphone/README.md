@@ -51,7 +51,7 @@ If sharing fails, check Local Network permission, the Mac's lock/sleep state, Ac
 
 ## Development
 
-`project.yml` is the XcodeGen source; generated projects and `Local.xcconfig` are ignored. Run `./run-iphone-checks.command` from the repository root for isolated LAN/TLS/client/image checks. These do not target the live Codex draft or general clipboard. Signed app/extension builds, physical installation, permissions, and real sharing are separate validation steps.
+`project.yml` is the XcodeGen source; generated projects and `Local.xcconfig` are ignored. Run `./scripts/test-iphone.zsh` from the repository root for isolated LAN/TLS/client/image checks. These do not target the live Codex draft or general clipboard. Signed app/extension builds, physical installation, permissions, and real sharing are separate validation steps.
 
 The simulator-only **CodexSharePreview** scheme renders the same share status view without pairing, receiver access, shared images, or clipboard use. Build for a simulator with `CODE_SIGNING_ALLOWED=NO`. Launch with `--scenario uploading`, `finding`, `confirming`, `unpaired`, `blocked`, or `uncertain`; add `--compact --large-text` for a compact accessibility preview. This fixture is not embedded in the shipping app.
 

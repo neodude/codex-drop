@@ -1,6 +1,6 @@
 #!/bin/zsh
 set -eu
-RECEIVER_ROOT=${0:A:h}
+RECEIVER_ROOT=${0:A:h:h}
 cd "$RECEIVER_ROOT"
 mkdir -p .codex-artifacts/checks
 python3 -m unittest discover -s receiver -p test_lan_receiver.py
