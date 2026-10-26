@@ -175,6 +175,37 @@ final class FakeAdapter: DeliveryAdapter {
                 foregroundReady: activationSamples >= 3, contentUnchanged: true)
         }
         try check(activationSamples == 3, "activation waits for foreground acknowledgement with the same window")
+        activationTime = 0; activationSamples = 0
+        try ComposerActivationGuard.waitUntilReady(now: { activationTime }, wait: { activationTime += $0 }) {
+            activationSamples += 1
+            return ComposerActivationObservation(window: .same, foregroundReady: true, contentUnchanged: true,
+                request: activationSamples < 3 ? .pending : .confirmed)
+        }
+        try check(activationSamples == 3, "foreground alone cannot approve an unfinished workspace request")
+        for (request, reason) in [(ActivationRequestState.failed, "codex_activation_failed"), (.differentProcess, "codex_activation_target_changed")] {
+            activationTime = 0; activationSamples = 0
+            do {
+                try ComposerActivationGuard.waitUntilReady(now: { activationTime }, wait: { activationTime += $0 }) {
+                    activationSamples += 1
+                    return ComposerActivationObservation(window: .same, foregroundReady: true, contentUnchanged: true,
+                        request: request)
+                }
+                try check(false, "failed or substituted workspace target must refuse")
+            } catch let refusal as DeliveryRefusal {
+                try check(refusal.reason == reason && activationSamples == 1 && activationTime == 0,
+                          "workspace error or different process blocks immediately without retry")
+            }
+        }
+        activationTime = 0
+        do {
+            try ComposerActivationGuard.waitUntilReady(now: { activationTime }, wait: { activationTime += $0 }, timeout: 0.05) {
+                ComposerActivationObservation(window: .same, foregroundReady: true, contentUnchanged: true, request: .pending)
+            }
+            try check(false, "missing workspace completion must remain bounded")
+        } catch let refusal as DeliveryRefusal {
+            try check(refusal.reason == "codex_activation_not_confirmed" && activationTime >= 0.05 && activationTime < 0.071,
+                      "missing workspace completion cannot turn foreground status into approval")
+        }
         for window in [ActivationWindowIdentity.same, .unavailable, .changed] {
             activationTime = 0; activationSamples = 0
             do {

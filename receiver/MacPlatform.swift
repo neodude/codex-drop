@@ -271,6 +271,27 @@ final class ClipboardLease {
     }
 }
 
+// NSWorkspace replies on another queue. Only this lock-protected result crosses
+// that boundary; all composer, clipboard and foreground checks stay on the caller.
+private final class WorkspaceActivationReply: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: ActivationRequestState = .pending
+
+    var state: ActivationRequestState {
+        lock.lock(); defer { lock.unlock() }
+        return value
+    }
+
+    func complete(application: NSRunningApplication?, error: Error?, expectedPID: pid_t, expectedBundleID: String) {
+        let result: ActivationRequestState
+        if error != nil || application == nil { result = .failed }
+        else if application?.processIdentifier != expectedPID || application?.bundleIdentifier != expectedBundleID { result = .differentProcess }
+        else { result = .confirmed }
+        lock.lock(); defer { lock.unlock() }
+        value = result
+    }
+}
+
 final class MacDeliveryAdapter: DeliveryAdapter {
     var now: TimeInterval { ProcessInfo.processInfo.systemUptime }
     var clipboardOwned: Bool { lease?.owned ?? false }
@@ -442,16 +463,30 @@ final class MacDeliveryAdapter: DeliveryAdapter {
         if needsActiveResponder {
             let pid = applicationPID(app)
             let previous = NSWorkspace.shared.frontmostApplication?.processIdentifier
+            var activationReply: WorkspaceActivationReply?
             activationDetails = ["targetPID": String(pid), "previousForegroundPID": previous.map(String.init) ?? "none",
                 "activationRequestedCount": "0", "activationAccepted": "not_requested"]
             if previous != pid {
-                guard let target = NSRunningApplication(processIdentifier: pid), target.bundleIdentifier == expectedBundleID else {
+                guard let target = NSRunningApplication(processIdentifier: pid), target.bundleIdentifier == expectedBundleID,
+                      !target.isTerminated, let bundleURL = target.bundleURL else {
                     throw DeliveryRefusal(reason: "codex_activation_failed", diagnostics: activationDetails)
                 }
                 activationDetails["activationRequestedCount"] = "1"
-                let accepted = target.activate(options: [.activateIgnoringOtherApps])
-                activationDetails["activationAccepted"] = String(accepted)
-                guard accepted else { throw DeliveryRefusal(reason: "codex_activation_failed", diagnostics: activationDetails) }
+                activationDetails["activationMethod"] = "workspace"
+                let reply = WorkspaceActivationReply()
+                activationReply = reply
+                let configuration = NSWorkspace.OpenConfiguration()
+                configuration.activates = true
+                configuration.createsNewApplicationInstance = false
+                configuration.allowsRunningApplicationSubstitution = false
+                configuration.addsToRecentItems = false
+                configuration.promptsUserIfNeeded = false
+                let bundleID = expectedBundleID
+                // Workspace routes the handoff through LaunchServices. A plain
+                // activate acknowledgement does not establish foreground access.
+                NSWorkspace.shared.openApplication(at: bundleURL, configuration: configuration) { application, error in
+                    reply.complete(application: application, error: error, expectedPID: pid, expectedBundleID: bundleID)
+                }
             }
             // Workspace activation acknowledgement can precede AX window readiness.
             // Wait only for missing window values; the original window/editor stay
@@ -464,6 +499,9 @@ final class MacDeliveryAdapter: DeliveryAdapter {
                     details["failureForegroundPID"] = active.map(String.init) ?? "none"
                     throw DeliveryRefusal(reason: "foreground_changed_during_activation", diagnostics: details)
                 }
+                let request = activationReply?.state ?? .confirmed
+                activationDetails["activationAccepted"] = request == .confirmed ? "true" : request == .pending ? "pending" : "false"
+                activationDetails["activationCompletion"] = String(describing: request)
                 let state = invariants()
                 if self.focusDiagnostic {
                     var sample = state.details
@@ -474,7 +512,7 @@ final class MacDeliveryAdapter: DeliveryAdapter {
                 var details = state.details
                 details["currentForegroundPID"] = active.map(String.init) ?? "none"
                 return ComposerActivationObservation(window: state.window, foregroundReady: active == pid,
-                    contentUnchanged: state.contentUnchanged, diagnostics: details)
+                    contentUnchanged: state.contentUnchanged, diagnostics: details, request: request)
             }
         } else {
             let activatedState = invariants(detailed: focusDiagnostic && !diagnosticActivates)

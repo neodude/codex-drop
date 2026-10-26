@@ -165,12 +165,14 @@ enum MacSessionLockState {
 // AX focused/main-window values can be absent while application activation is
 // asynchronous. A missing value is distinct from an available different window.
 enum ActivationWindowIdentity { case same, unavailable, changed }
+enum ActivationRequestState { case pending, confirmed, failed, differentProcess }
 
 struct ComposerActivationObservation {
     var window: ActivationWindowIdentity
     var foregroundReady: Bool
     var contentUnchanged: Bool
     var diagnostics: [String: String] = [:]
+    var request: ActivationRequestState = .confirmed
 }
 
 enum ComposerActivationGuard {
@@ -184,10 +186,17 @@ enum ComposerActivationGuard {
             guard state.window != .changed, state.contentUnchanged else {
                 throw DeliveryRefusal(reason: "composer_changed_during_activation", diagnostics: state.diagnostics)
             }
-            if state.window == .same && state.foregroundReady { return }
+            switch state.request {
+            case .failed:
+                throw DeliveryRefusal(reason: "codex_activation_failed", diagnostics: state.diagnostics)
+            case .differentProcess:
+                throw DeliveryRefusal(reason: "codex_activation_target_changed", diagnostics: state.diagnostics)
+            case .pending, .confirmed: break
+            }
+            if state.window == .same && state.foregroundReady && state.request == .confirmed { return }
             let remaining = deadline - now()
             guard remaining > 0 else {
-                throw DeliveryRefusal(reason: state.foregroundReady ? "composer_window_unavailable_after_activation" : "codex_activation_not_confirmed",
+                throw DeliveryRefusal(reason: state.foregroundReady && state.request == .confirmed ? "composer_window_unavailable_after_activation" : "codex_activation_not_confirmed",
                                       diagnostics: state.diagnostics)
             }
             wait(min(0.02, remaining))
