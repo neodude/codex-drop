@@ -31,6 +31,9 @@ private func originalImage(_ url: URL, sha256: String? = nil) throws -> Original
             throw DeliveryRefusal(reason: "batch_image_checksum_changed")
         }
     }
+    if let type = try OriginalVideoContainer.identify(data) {
+        return OriginalImage(data: data, fileURL: url, type: type)
+    }
     let options = [kCGImageSourceShouldCache: false, kCGImageSourceShouldCacheImmediately: false] as CFDictionary
     guard let source = CGImageSourceCreateWithData(data as CFData, options),
           let identifier = CGImageSourceGetType(source) as String?, CGImageSourceGetCount(source) > 0 else {

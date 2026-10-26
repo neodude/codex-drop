@@ -34,12 +34,13 @@ import ImageIO
                 return
             }
             let items = (context.inputItems as? [NSExtensionItem] ?? []).flatMap { $0.attachments ?? [] }
-                .filter { $0.hasItemConformingToTypeIdentifier(UTType.image.identifier) }
-            guard (1...10).contains(items.count) else { throw ReceiverError.message("Share 1–10 images at a time.") }
+                .filter { $0.hasItemConformingToTypeIdentifier(UTType.image.identifier) ||
+                          $0.hasItemConformingToTypeIdentifier(UTType.movie.identifier) }
+            guard (1...10).contains(items.count) else { throw ReceiverError.message("Share 1–10 files at a time.") }
             sheet.render(status: "Finding your Mac…", detail: Self.destination(count: items.count), stage: 0)
             let client = ReceiverClient(pairing: pairing); defer { client.close() }
             let job = try await client.attachBatch(count: items.count, id: requestID, prepareFile: { index in
-                let input = try await Self.readImage(items[index])
+                let input = try await Self.readFile(items[index])
                 formatDiagnostic = ImageInput.formatDiagnostic(of: input,
                     requestedType: ImageInput.originalTypeIdentifier(in: items[index].registeredTypeIdentifiers),
                     offeredTypes: items[index].registeredTypeIdentifiers)
@@ -53,9 +54,9 @@ import ImageIO
             }, progress: { [self] progress in
                 switch progress {
                 case let .preparing(index, count):
-                    sheet.render(status: "Reading image \(index + 1) of \(count)", detail: Self.destination(count: count), stage: 1)
+                    sheet.render(status: "Reading file \(index + 1) of \(count)", detail: Self.destination(count: count), stage: 1)
                 case let .uploading(index, count):
-                    sheet.render(status: "Uploading image \(index + 1) of \(count)", detail: Self.destination(count: count), stage: 1)
+                    sheet.render(status: "Uploading file \(index + 1) of \(count)", detail: Self.destination(count: count), stage: 1)
                 case .committing:
                     committed = true
                     sheet.render(status: "Attaching to Codex…", detail: "You can close this sheet. Delivery will continue on your Mac.", stage: 2, buttonTitle: "Close")
@@ -71,22 +72,22 @@ import ImageIO
         } catch is CancellationError { }
         catch {
             if committed {
-                sheet.render(title: "Check your Mac", status: "Attachment isn’t confirmed", detail: "Some images may already be attached. Check Codex before sharing again. Don’t resend images already attached. No automatic retry.", stage: nil, working: false, buttonTitle: "Close")
+                sheet.render(title: "Check your Mac", status: "Attachment isn’t confirmed", detail: "Some files may already be attached. Check Codex before sharing again. Don’t resend files already attached. No automatic retry.", stage: nil, working: false, buttonTitle: "Close")
             } else {
-                var detail = error is ReceiverError ? error.localizedDescription : "Connection or image preparation interrupted."
+                var detail = error is ReceiverError ? error.localizedDescription : "Connection or file preparation interrupted."
                 if (error as? ReceiverError)?.isUnsupportedImageFormat == true, let formatDiagnostic {
                     detail += "\n\n" + formatDiagnostic
                 }
-                sheet.render(title: "Drop interrupted", status: "No images attached", detail: detail, stage: nil, working: false, buttonTitle: "Close")
+                sheet.render(title: "Drop interrupted", status: "No files attached", detail: detail, stage: nil, working: false, buttonTitle: "Close")
             }
         }
     }
     private static func destination(count: Int) -> String {
-        count == 1 ? "Your Mac will add this image\nto the current draft." : "Your Mac will add all \(count) images\nto the current draft."
+        count == 1 ? "Your Mac will add this file\nto the current draft." : "Your Mac will add all \(count) files\nto the current draft."
     }
-    private static func readImage(_ item: NSItemProvider) async throws -> ImageFile {
+    private static func readFile(_ item: NSItemProvider) async throws -> ImageFile {
         guard let type = ImageInput.originalTypeIdentifier(in: item.registeredTypeIdentifiers) else {
-            throw ReceiverError.message("The source app did not provide a concrete image file representation. Share an image file from Photos or Files; Codex Drop will not convert it.")
+            throw ReceiverError.message("The source app did not provide a concrete image or video file representation. Share a supported file from Photos or Files; Codex Drop will not convert it.")
         }
         let load = ImageProviderLoad()
         let image = try await withTaskCancellationHandler {

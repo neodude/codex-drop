@@ -37,6 +37,22 @@ class FlowTest {
             assertThrows(DropFailure::class.java) { IncomingShare.read(invalid) }
         }
     }
+    @Test fun movieAndMixedShareIntentsKeepStreamAndClipOrdering() {
+        val mp4 = Uri.parse("content://guide.guidelabs.codexdrop.test.images/original.mp4")
+        val mov = Uri.parse("content://guide.guidelabs.codexdrop.test.images/original.mov")
+        assertEquals(listOf(mp4.toString()), IncomingShare.read(share(1).setType("video/mp4").putExtra(Intent.EXTRA_STREAM, mp4)))
+        assertEquals(listOf(mov.toString()), IncomingShare.read(share(1).setType("video/quicktime").putExtra(Intent.EXTRA_STREAM, mov)))
+        val ordered = arrayListOf(mp4, uri(0), mov)
+        val mixed = share(3).setType("*/*").putParcelableArrayListExtra(Intent.EXTRA_STREAM, ordered)
+        assertEquals(ordered.map(Uri::toString), IncomingShare.read(mixed))
+        val clip = ClipData.newRawUri("fixture", mp4).apply { addItem(ClipData.Item(uri(0))); addItem(ClipData.Item(mov)) }
+        mixed.removeExtra(Intent.EXTRA_STREAM)
+        mixed.clipData = clip
+        assertEquals(ordered.map(Uri::toString), IncomingShare.read(mixed))
+        for (invalid in listOf(share(1).setType("video/webm"), share(1).setType("audio/mp4"), share(1).setType("*/*"))) {
+            assertThrows(DropFailure::class.java) { IncomingShare.read(invalid) }
+        }
+    }
     @Test fun realPinnedReceiverVerifiesThreeImagesAndClosesShare(): Unit = runBlocking {
         val raw = InstrumentationRegistry.getArguments().getString("fixture")
         Assume.assumeNotNull(raw)

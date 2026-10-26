@@ -33,4 +33,14 @@ Keep detailed logs and captures in ignored `.codex-artifacts/`. Do not commit QR
 
 ## Validation and known gaps
 
-Automated checks and manual acceptance are separate. Keep exact device, build, toolchain, sample and execution records in ignored local artifacts; publish only generic coverage and known limitations.
+Automated checks cover transfer bounds, pinning and authentication, byte preservation, mixed batches, cancellation, queue recovery, clipboard restoration, destination guards, application lifecycle and synthetic media validation. Real-device image and single-video attachment have also been checked. Exact device inventories, installed builds, toolchain versions, diagnostic receipts and testing-session narratives belong only in ignored local artifacts.
+
+Some lifecycle instrumentation coverage remains unresolved. Remaining manual coverage includes broader platform/provider behavior, mixed image/video shares on phones, maximum-size files through Codex itself, clean-configuration builds, and optimized release builds. Compatibility requirements come from the checked-in deployment targets and build configuration; they are not a description of a particular contributor's computer.
+
+An optimized iOS build can encounter a compiler assertion in the share controller. A Debug build is useful for isolating that failure, but Debug validation does not establish Release readiness. Distribution packaging, notarization, and fresh-install/runtime acceptance remain separate gates.
+
+## Real-device acceptance checklist
+
+Use a disposable unsent draft with known text and existing attachments. Confirm pairing and permissions, then a single image, video, and mixed batch. Verify the destination, unchanged draft, preserved existing attachments, new attachments in order, automatic phone dismissal on success, and no sent message. Repeat the relevant background/lock/provider scenarios. Inspect blocked or uncertain results rather than retrying blindly.
+
+Keep detailed receipts, original-file hash comparisons and device/build records in ignored `.codex-artifacts/`. A locked or unavailable destination must block safely. After restoring the destination, a fresh share must work without replaying an earlier request. Clipboard delivery restores saved contents only while it still owns the clipboard; newer copied contents are preserved. Interactive fixture checks require an explicit handoff and a bounded timeout.

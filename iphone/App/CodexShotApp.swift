@@ -56,7 +56,7 @@ struct PairingView: View {
             status = "Finding your Mac… Allow Local Network access if asked."
             let client = ReceiverClient(pairing: value); defer { client.close() }
             try await client.checkConnection(); try PairingStore.save(value)
-            pairing = value; status = "Connected. Share images to Codex Drop to attach them to your current Mac draft."
+            pairing = value; status = "Connected. Share images or videos to Codex Drop to attach them to your current Mac draft."
         } catch { status = error is ReceiverError ? error.localizedDescription : "Could not connect. Check Wi-Fi, the Mac receiver and Local Network permission, then scan again." }
     }
     private func check() async {

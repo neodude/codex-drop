@@ -66,7 +66,7 @@ private val Mint = Color(0xFF69D5C1)
 @Composable private fun TransferStages(stage: Int) {
     Column(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface, RoundedCornerShape(20.dp))
         .padding(20.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
-        listOf("Find your Mac", "Transfer images", "Attach to draft").forEachIndexed { index, label ->
+        listOf("Find your Mac", "Transfer files", "Attach to draft").forEachIndexed { index, label ->
             Row(verticalAlignment = Alignment.CenterVertically) {
                 when {
                     index < stage -> Icon(Icons.Filled.CheckCircle, "Completed", Modifier.size(20.dp), tint = Mint)
@@ -112,7 +112,7 @@ private val Mint = Color(0xFF69D5C1)
         Spacer(Modifier.height(26.dp))
         Column(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface, RoundedCornerShape(20.dp))
             .padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            listOf("Keep Codex Drop running on your Mac.", "Use the same Wi-Fi on both devices.", "Share 1–10 images → Codex Drop.").forEachIndexed { index, instruction ->
+            listOf("Keep Codex Drop running on your Mac.", "Use the same Wi-Fi on both devices.", "Share 1–10 files → Codex Drop.").forEachIndexed { index, instruction ->
                 Row {
                     Text("${index + 1}.", color = Aquamarine, lineHeight = 24.sp, modifier = Modifier.widthIn(min = 24.dp))
                     Spacer(Modifier.width(10.dp))

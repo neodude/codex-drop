@@ -58,7 +58,7 @@ class PinnedHttpsTransport(pairing: Pairing, endpoint: Endpoint) : Transport, Cl
             .protocols(listOf(Protocol.HTTP_1_1)) // The paired Python receiver speaks HTTP/1.1.
             .connectTimeout(5, TimeUnit.SECONDS).readTimeout(10, TimeUnit.SECONDS).writeTimeout(20, TimeUnit.SECONDS)
             .callTimeout(25, TimeUnit.SECONDS).build()
-        // Larger images may need time on Wi-Fi. Keep a finite whole-call deadline and one-shot bodies.
+        // Larger files may need time on Wi-Fi. Keep a finite whole-call deadline and one-shot bodies.
         uploadClient = client.newBuilder().writeTimeout(120, TimeUnit.SECONDS).callTimeout(120, TimeUnit.SECONDS).build()
     }
     override suspend fun execute(request: HttpRequest): HttpReply {

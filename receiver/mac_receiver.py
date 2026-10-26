@@ -20,6 +20,7 @@ import tempfile
 import time
 import uuid
 import zlib
+from video_container import VideoContainerError, video_extension
 
 MAX_IMAGE = 50 * 1024 * 1024
 UNSUPPORTED_HEIC_MESSAGE = ("Codex does not accept HEIC/HEIF as image inputs. Share a JPEG, PNG, GIF or WebP instead. "
@@ -88,7 +89,13 @@ def validate_image(data):
     limit because staging an original file does not allocate a decoded bitmap.
     """
     if len(data) > MAX_IMAGE:
-        raise InvalidImage("Image exceeds the 50 MiB limit", "image_size_limit")
+        raise InvalidImage("File exceeds the 50 MiB limit", "image_size_limit")
+    try:
+        video = video_extension(data)
+    except VideoContainerError as error:
+        raise InvalidImage(str(error), "invalid_image") from error
+    if video:
+        return video
     def malformed():
         raise InvalidImage("Malformed or incomplete image file", "invalid_image")
     if data.startswith(b"\x89PNG\r\n\x1a\n"):
@@ -155,7 +162,7 @@ def validate_image(data):
         brands.update(data[index:index+4] for index in range(header+8, min(size, header+4096), 4))
         if not brands & {b"avif", b"avis"} and brands & {b"heic", b"heix", b"hevc", b"hevx", b"mif1", b"msf1"}:
             raise InvalidImage(UNSUPPORTED_HEIC_MESSAGE, "unsupported_image_format")
-    raise InvalidImage("Unsupported image format; use PNG, JPEG, GIF or WebP", "unsupported_image_format")
+    raise InvalidImage("Unsupported file format; use PNG, JPEG, GIF, WebP, MP4 or MOV", "unsupported_image_format")
 
 
 
@@ -755,7 +762,7 @@ def make_server(queue, token, port=0, *, bind_host="127.0.0.1", persistent_conne
             if not (12 <= length <= MAX_IMAGE if is_image else 2 <= length <= 1024):
                 self.close_connection = True
                 self.reply(413, {"error": "image_size_limit" if is_image else "json_size_limit",
-                                 "message": "Image must be between 12 bytes and 50 MiB" if is_image else "JSON exceeds size limit"})
+                                 "message": "File must be between 12 bytes and 50 MiB" if is_image else "JSON exceeds size limit"})
                 return
             try:
                 data = self.rfile.read(length)
@@ -857,7 +864,7 @@ def main():
                     consume_queue(queue, worker, stop)
                 thread = threading.Thread(target=consume, daemon=True); thread.start()
                 print(f"Receiver listening on 127.0.0.1:{server.server_port}. Token file: {queue.directory / 'http-token'}", flush=True)
-                print("Only a focused, recognized composer can receive an image. Ctrl-C stops the receiver.", flush=True)
+                print("Only a focused, recognized composer can receive a file. Ctrl-C stops the receiver.", flush=True)
                 try:
                     server.serve_forever()
                 except KeyboardInterrupt:

@@ -116,7 +116,9 @@ class LANTLSTests(unittest.TestCase):
     def test_generic_original_upload_preserves_every_supported_format(self):
         import hashlib, uuid
         from test_original_images import original_samples, supported_original_samples
-        for suffix, data in supported_original_samples().items():
+        from test_original_videos import video_sample
+        samples = supported_original_samples() | {"mp4": video_sample(), "mov": video_sample(brand=b"qt  ")}
+        for suffix, data in samples.items():
             with self.subTest(suffix=suffix):
                 key = str(uuid.uuid4())
                 status, receipt = self.request('POST', '/v1/screenshots', data,
@@ -139,8 +141,9 @@ class LANTLSTests(unittest.TestCase):
     def test_generic_mixed_batch_original_uploads_use_one_pinned_socket(self):
         import hashlib
         from test_original_images import original_samples, supported_original_samples
+        from test_original_videos import video_sample
         key = '1b2db6c3-6212-4c15-9078-cf8b5697f8a7'
-        samples = list(supported_original_samples().items())
+        samples = list(supported_original_samples().items()) + [("mp4", video_sample()), ("mov", video_sample(brand=b"qt  "))]
         steps = [('/v1/batches', json.dumps({'count': len(samples)}).encode(), 'application/json')]
         steps += [(f'/v1/batches/{key}/images/{index}', data, 'application/octet-stream')
                   for index, (_, data) in enumerate(samples)]

@@ -340,6 +340,7 @@ final class ArchiveDecodeTrap: NSObject, NSSecureCoding {
         do { _ = try await run(timed, timeout: .zero); fatalError("Pending accepted") }
         catch { precondition(timed.calls.filter { $0.hasSuffix("commit") }.count == 1) }
         checks += 1
+        checks += try await videoChecks(pairing: pairing)
         checks += try await imageChecks(pairing: pairing)
         var files: [URL] = []
         let fileStub = BatchStub(); fileStub.count = 1
@@ -365,6 +366,96 @@ final class ArchiveDecodeTrap: NSObject, NSSecureCoding {
         precondition(files.allSatisfy { !FileManager.default.fileExists(atPath: $0.path) })
         precondition(!cancelledFile.calls.contains { $0.hasSuffix("commit") }); checks += 1
         print("PASS: \(checks) Swift batch sequencing, bounds, cancellation, partial-result, timeout and original-file byte-preservation checks; no network, Codex or clipboard access.")
+    }
+    @MainActor static func videoChecks(pairing: Pairing) async throws -> Int {
+        var checks = 0
+        for movie in [UTType.mpeg4Movie, UTType.quickTimeMovie] {
+            precondition(ImageInput.originalTypeIdentifier(in: [UTType.movie.identifier, movie.identifier]) == movie.identifier,
+                         "A movie provider must supply its original file representation")
+            precondition(ImageInput.originalTypeIdentifier(in: [UTType.heic.identifier, movie.identifier]) == movie.identifier,
+                         "Prefer an available supported original file")
+            checks += 2
+        }
+        precondition(ImageInput.originalTypeIdentifier(in: [UTType.quickTimeMovie.identifier, UTType.png.identifier]) == UTType.quickTimeMovie.identifier,
+                     "Preserve provider ordering among supported original formats")
+        precondition(ImageInput.originalTypeIdentifier(in: [UTType.image.identifier, UTType.movie.identifier, UTType.video.identifier]) == nil)
+        precondition(ImageInput.originalTypeIdentifier(in: [UTType.plainText.identifier, UTType.audio.identifier]) == nil)
+        checks += 3
+        let plist = try PropertyListSerialization.propertyList(from: Data(contentsOf: URL(fileURLWithPath: "iphone/Share/Info.plist")), format: nil) as! [String: Any]
+        let ext = plist["NSExtension"] as! [String: Any]
+        let attributes = ext["NSExtensionAttributes"] as! [String: Any]
+        let activation = attributes["NSExtensionActivationRule"] as! [String: Any]
+        precondition(activation["NSExtensionActivationSupportsImageWithMaxCount"] as? Int == 10)
+        precondition(activation["NSExtensionActivationSupportsMovieWithMaxCount"] as? Int == 10)
+        precondition(activation["NSExtensionActivationSupportsAttachmentsWithMaxCount"] as? Int == 10)
+        checks += 3
+        // Opaque original containers exercise transfer, not receiver validation.
+        // Include an audio marker to catch any accidental video/frame extraction.
+        let mp4 = Data([0, 0, 0, 24]) + Data("ftypmp42\0\0\0\0mp42isommdatHEVC AAC original audio".utf8)
+        let mov = Data([0, 0, 0, 20]) + Data("ftypqt  \0\0\0\0qt  mdatQuickTime original audio".utf8)
+        let originals = [mp4, fixture(type: .png), mov]
+        let stub = BatchStub(); stub.count = originals.count
+        var ownedURLs: [URL] = []
+        let providerURLs = originals.map { _ in ImageFile.temporaryURL() }
+        defer { for url in providerURLs { try? FileManager.default.removeItem(at: url) } }
+        for (index, bytes) in originals.enumerated() {
+            try bytes.write(to: providerURLs[index])
+            stub.expectedHashes[index] = try fileHash(providerURLs[index])
+        }
+        let client = ReceiverClient(pairing: pairing, baseURL: URL(string: "https://test.invalid")!, transport: stub.send)
+        defer { client.close() }
+        let result = try await client.attachBatch(count: originals.count, id: stub.id, prepareFile: { index in
+            if let previous = ownedURLs.last { precondition(!FileManager.default.fileExists(atPath: previous.path)) }
+            stub.prepared.append(index)
+            let file = try ImageFile.copy(from: providerURLs[index])
+            let prepared = try await ImageInput.originalFile(file)
+            precondition(prepared === file && (try! Data(contentsOf: prepared.url)) == originals[index])
+            ownedURLs.append(prepared.url)
+            return prepared
+        })
+        precondition(result.allVerified(count: originals.count))
+        precondition(stub.prepared == [0, 1, 2])
+        precondition(ownedURLs.allSatisfy { !FileManager.default.fileExists(atPath: $0.path) })
+        checks += 4
+        let beforeCopy = Set(try FileManager.default.contentsOfDirectory(atPath: FileManager.default.temporaryDirectory.path))
+        var copyCalls = 0
+        do {
+            _ = try ImageFile.copy(from: providerURLs[0], cancelled: { copyCalls += 1; return copyCalls > 1 })
+            fatalError("Cancelled movie copy accepted")
+        }
+        catch { precondition(error is CancellationError) }
+        let afterCopy = Set(try FileManager.default.contentsOfDirectory(atPath: FileManager.default.temporaryDirectory.path))
+        precondition(afterCopy.subtracting(beforeCopy).filter { $0.hasPrefix("codex-drop-image-") }.isEmpty,
+                     "Cancelled movie copy must remove its partial temporary file")
+        checks += 2
+        let oversized = ImageFile.temporaryURL()
+        defer { try? FileManager.default.removeItem(at: oversized) }
+        try mp4.write(to: oversized)
+        let oversizedHandle = try FileHandle(forWritingTo: oversized)
+        try oversizedHandle.truncate(atOffset: UInt64(ImageInput.maximumBytes + 1))
+        try oversizedHandle.close()
+        do { _ = try ImageFile.copy(from: oversized); fatalError("Oversized movie copy accepted") }
+        catch { precondition(error.localizedDescription.contains("50 MiB")) }
+        let afterOversize = Set(try FileManager.default.contentsOfDirectory(atPath: FileManager.default.temporaryDirectory.path))
+        precondition(afterOversize.subtracting(beforeCopy).filter { $0.hasPrefix("codex-drop-image-") } == [oversized.lastPathComponent],
+                     "Oversized movie copy must remove its partial temporary file")
+        checks += 2
+        let cancelled = BatchStub(); cancelled.count = originals.count; cancelled.cancelAfterUpload = 1
+        cancelled.expectedHashes = stub.expectedHashes
+        let cancelledClient = ReceiverClient(pairing: pairing, baseURL: URL(string: "https://test.invalid")!, transport: cancelled.send)
+        defer { cancelledClient.close() }
+        let transfer = Task {
+            try await cancelledClient.attachBatch(count: originals.count, id: cancelled.id, prepareFile: { index in
+                cancelled.prepared.append(index)
+                let file = try ImageFile.copy(from: providerURLs[index]); ownedURLs.append(file.url); return file
+            })
+        }
+        do { _ = try await transfer.value; fatalError("Cancelled mixed batch committed") }
+        catch { precondition(error is CancellationError) }
+        precondition(cancelled.prepared == [0, 1] && !cancelled.calls.contains { $0.hasSuffix("commit") })
+        precondition(ownedURLs.allSatisfy { !FileManager.default.fileExists(atPath: $0.path) })
+        checks += 3
+        return checks
     }
     // Test-only pixel generation; production diagnostics only identify containers.
     static func fixture(type: UTType, width: Int = 64, height: Int = 32) -> Data {

@@ -18,7 +18,16 @@ public final class ImageFixtureProvider extends ContentProvider {
         return new android.os.Bundle();
     }
     @Override public boolean onCreate() { return true; }
-    @Override public String getType(Uri uri) { return uri.getPath().endsWith(".jpg") ? "image/jpeg" : "image/png"; }
+    @Override public String getType(Uri uri) {
+        String name = uri.getLastPathSegment();
+        if (name.startsWith("unknown-")) return null;
+        if (name.startsWith("generic-")) return "application/octet-stream";
+        if (name.endsWith(".mp4")) return "video/mp4";
+        if (name.endsWith(".mov")) return "video/quicktime";
+        if (name.endsWith(".pdf")) return "application/pdf";
+        if (name.endsWith(".webm")) return "video/webm";
+        return uri.getPath().endsWith(".jpg") ? "image/jpeg" : "image/png";
+    }
     @Override public ParcelFileDescriptor openFile(Uri uri, String mode) throws FileNotFoundException {
         if (!mode.equals("r") || "missing".equals(uri.getLastPathSegment())) throw new FileNotFoundException();
         if ("denied".equals(uri.getLastPathSegment())) throw new SecurityException("Synthetic revoked grant");
@@ -31,10 +40,22 @@ public final class ImageFixtureProvider extends ContentProvider {
                         if (!gates.computeIfAbsent(uri.getLastPathSegment(),k -> new java.util.concurrent.CountDownLatch(1)).await(18,java.util.concurrent.TimeUnit.SECONDS)) return;
                     } catch (InterruptedException e) { Thread.currentThread().interrupt(); return; }
                 }
-                if ("slow.png".equals(uri.getLastPathSegment()) || "blocked.png".equals(uri.getLastPathSegment())) {
-                    try { Thread.sleep("blocked.png".equals(uri.getLastPathSegment()) ? 15000 : 3000); } catch (InterruptedException e) { Thread.currentThread().interrupt(); return; }
+                if ("slow.png".equals(uri.getLastPathSegment()) || uri.getLastPathSegment().startsWith("blocked")) {
+                    try { Thread.sleep(uri.getLastPathSegment().startsWith("blocked") ? 15000 : 3000); } catch (InterruptedException e) { Thread.currentThread().interrupt(); return; }
                 }
                 String name = uri.getLastPathSegment();
+                if (name.endsWith(".mp4") || name.endsWith(".mov")) {
+                    String resourceName = name.endsWith(".mov") ? "/synthetic-video.mov" : "/synthetic-video.mp4";
+                    try (java.io.InputStream resource = ImageFixtureProvider.class.getResourceAsStream(resourceName)) {
+                        if (resource == null) throw new IOException("Missing synthetic video fixture");
+                        byte[] bytes = new byte[16384];int n;while ((n = resource.read(bytes)) != -1) stream.write(bytes,0,n);
+                    }
+                    if (name.startsWith("over-limit")) {
+                        byte[] zeros = new byte[16384];
+                        for (int remaining = 50 * 1024 * 1024 + 1; remaining > 0;) { int n = Math.min(zeros.length, remaining);stream.write(zeros,0,n);remaining -= n; }
+                    }
+                    return;
+                }
                 if (name.equals("camera.png") || name.equals("camera.jpg") || name.startsWith("oriented-") || name.equals("large.jpg") || name.equals("original.webp")) {
                     int width = name.startsWith("oriented-") ? 4000 : name.equals("large.jpg") ? 5000 : 3024;
                     int height = name.startsWith("oriented-") ? 3500 : name.equals("large.jpg") ? 4000 : 4032;

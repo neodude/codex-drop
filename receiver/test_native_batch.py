@@ -7,11 +7,21 @@ import subprocess
 import tempfile
 import unittest
 import uuid
+import struct
 
 from test_receiver import generated_png
 from test_original_images import original_samples, supported_original_samples, webp_variants
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
+def video_container(brand=b"isom", handler=b"vide", codec=b"hvc1"):
+    def box(kind, payload):
+        return struct.pack(">I4s", len(payload) + 8, kind) + payload
+    visual = bytes(6) + struct.pack(">H", 1) + bytes(16) + struct.pack(">HH", 16, 16) + bytes(50)
+    stsd = box(b"stsd", bytes(4) + struct.pack(">I", 1) + box(codec, visual))
+    media = box(b"hdlr", bytes(8) + handler + bytes(12)) + box(b"minf", box(b"stbl", stsd))
+    return box(b"ftyp", brand + bytes(4) + brand) + box(b"moov", box(b"trak", box(b"mdia", media))) + box(b"mdat", b"original encoded video bytes")
 
 
 def run_native_preflight(arguments, **kwargs):
@@ -118,6 +128,56 @@ class NativeBatchPreflightTests(unittest.TestCase):
     def test_original_containers_pass_metadata_preflight(self):
         for suffix, data in supported_original_samples().items():
             with self.subTest(suffix=suffix): self.image_then_invalid(data)
+
+    def test_video_containers_and_mixed_batch_pass_metadata_preflight(self):
+        for brand in (b"isom", b"mp42", b"qt  "):
+            with self.subTest(brand=brand): self.image_then_invalid(video_container(brand))
+        original = video_container()
+        ftyp_size = struct.unpack_from(">I", original)[0]
+        extended = struct.pack(">I4sQ", 1, b"ftyp", ftyp_size + 8) + original[8:]
+        self.image_then_invalid(extended)
+        # A terminal size-zero mdat extends to EOF; both encodings preserve bytes.
+        mdat = original.index(b"mdat") - 4
+        self.image_then_invalid(original[:mdat] + bytes(4) + original[mdat + 4:])
+
+    def test_audio_only_spoofed_and_malformed_video_refused_before_ui(self):
+        for data in (video_container(handler=b"soun", codec=b"mp4a"),
+                     video_container(codec=b"mp4a"), video_container()[:-1],
+                     video_container().replace(b"moov", b"free", 1),
+                     video_container().replace(b"stsd", b"free", 1),
+                     struct.pack(">I4sQ", 1, b"ftyp", 2**64 - 1),
+                     struct.pack(">I4s", 7, b"ftyp"),
+                     video_container() + b"trailing",
+                     video_container() + video_container()[:20]):
+            with self.subTest(data=data[:20]): self.image_then_invalid(data, "invalid_image")
+        for brand in (b"heic", b"avif", b"mif1", b"heim", b"heis", b"hevm", b"hevs"):
+            with self.subTest(brand=brand): self.image_then_invalid(video_container(brand), "unsupported_image_type")
+
+    def test_video_original_bytes_round_trip_via_file_url_only(self):
+        executable = os.environ.get("CODEX_DROP_TEST_RECEIVER", str(ROOT / "MacAttachmentReceiver"))
+        with tempfile.TemporaryDirectory(prefix="codex video originals ") as directory:
+            for suffix, brand in (("mp4", b"isom"), ("mov", b"qt  ")):
+                with self.subTest(suffix=suffix):
+                    data = video_container(brand)
+                    path = Path(directory) / ("unchanged original." + suffix); path.write_bytes(data)
+                    process = subprocess.run([executable, "--self-test-original-file", str(path)], capture_output=True, text=True, timeout=10)
+                    self.assertEqual(process.returncode, 0, process.stderr)
+                    self.assertIn(suffix + ", exact SHA256, file-url only, retained after restore", process.stdout)
+                    self.assertEqual(path.read_bytes(), data)
+
+    def test_video_limits_and_mixed_batch_validate_before_ui(self):
+        original = video_container()
+        mdat = original.index(b"mdat") - 4
+        bounded = original[:mdat] + bytes(4) + original[mdat + 4:]
+        self.image_then_invalid(bounded.ljust(50 * 1024 * 1024, b"v"))
+        self.image_then_invalid(bounded.ljust(50 * 1024 * 1024 + 1, b"v"), "image_size_limit")
+        with tempfile.TemporaryDirectory(prefix="codex mixed native ") as directory:
+            entries = []
+            for index, data in enumerate((generated_png(), video_container(), video_container(b"qt  "), generated_png())):
+                path = Path(directory) / str(index); path.write_bytes(data)
+                entries.append({"path": str(path), "sha256": hashlib.sha256(data).hexdigest()})
+            entries[-1]["sha256"] = "0" * 64
+            self.run_manifest({"images": entries}, "batch_image_checksum_changed")
 
     def test_heic_heif_are_refused_before_clipboard_or_snapshot_staging(self):
         with tempfile.TemporaryDirectory(prefix="codex-native-refused-heif-") as directory:

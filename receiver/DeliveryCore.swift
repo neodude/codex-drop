@@ -9,9 +9,96 @@ enum ImageLimits {
 }
 
 enum OriginalImageType: String {
-    case png, jpeg, gif, webp
+    case png, jpeg, gif, webp, mp4, mov
     var fileExtension: String { self == .jpeg ? "jpg" : rawValue }
-    static let supportedExtensions: Set<String> = ["png", "jpg", "jpeg", "gif", "webp"]
+    static let supportedImageExtensions: Set<String> = ["png", "jpg", "jpeg", "gif", "webp"]
+    static let supportedExtensions = supportedImageExtensions.union(["mp4", "mov"])
+    var isVideo: Bool { self == .mp4 || self == .mov }
+}
+
+/// Bounded ISO BMFF metadata validation; never decodes or rewrites media.
+enum OriginalVideoContainer {
+    private struct Box { let kind: String; let payload: Range<Int> }
+    private static let movieBrands: Set<String> = ["isom", "iso2", "iso3", "iso4", "iso5", "iso6", "mp41", "mp42", "avc1", "hvc1", "hev1", "M4V ", "MSNV"]
+    private static let imageBrands: Set<String> = ["heic", "heix", "hevc", "hevx", "heim", "heis", "hevm", "hevs", "mif1", "msf1", "avif", "avis"]
+    private static let visualCodecs: Set<String> = ["avc1", "avc3", "hvc1", "hev1", "mp4v", "av01", "vp09", "jpeg", "mjpa", "mjpb", "ap4h", "ap4x", "apch", "apcn", "apcs", "apco"]
+
+    static func identify(_ data: Data) throws -> OriginalImageType? {
+        guard data.count >= 8 else { return nil }
+        func tag(_ start: Int) -> String { String(decoding: data[start..<start + 4], as: UTF8.self) }
+        guard ["ftyp", "free", "wide", "skip"].contains(tag(4)) else { return nil }
+        var budget = 4096
+        func uint(_ start: Int, _ count: Int) -> UInt64 {
+            data[start..<start + count].reduce(UInt64(0)) { ($0 << 8) | UInt64($1) }
+        }
+        func only(_ items: [Box], _ kind: String) throws -> Box {
+            let matching = items.filter { $0.kind == kind }
+            guard matching.count == 1 else { throw DeliveryRefusal(reason: "invalid_image") }
+            return matching[0]
+        }
+        func boxes(_ range: Range<Int>) throws -> [Box] {
+            var result: [Box] = [], cursor = range.lowerBound
+            while cursor < range.upperBound {
+                budget -= 1
+                guard budget >= 0, range.upperBound - cursor >= 8 else { throw DeliveryRefusal(reason: "invalid_image") }
+                var header = 8
+                var size = uint(cursor, 4)
+                let kind = tag(cursor + 4)
+                if size == 1 {
+                    guard range.upperBound - cursor >= 16 else { throw DeliveryRefusal(reason: "invalid_image") }
+                    header = 16; size = uint(cursor + 8, 8)
+                } else if size == 0 { size = UInt64(range.upperBound - cursor) }
+                guard size >= UInt64(header), size <= UInt64(range.upperBound - cursor) else { throw DeliveryRefusal(reason: "invalid_image") }
+                let end = cursor + Int(size)
+                result.append(Box(kind: kind, payload: cursor + header..<end)); cursor = end
+            }
+            return result
+        }
+        let top = try boxes(0..<data.count)
+        let ftypes = top.filter { $0.kind == "ftyp" }
+        guard ftypes.count == 1 else { throw DeliveryRefusal(reason: "invalid_image") }
+        let ftyp = ftypes[0].payload
+        guard ftyp.count >= 8, ftyp.count <= 4096, (ftyp.count - 8).isMultiple(of: 4) else { throw DeliveryRefusal(reason: "invalid_image") }
+        let major = tag(ftyp.lowerBound)
+        let brands = [major] + stride(from: ftyp.lowerBound + 8, to: ftyp.upperBound, by: 4).map(tag)
+        guard Set(brands).isDisjoint(with: imageBrands) else { throw DeliveryRefusal(reason: "unsupported_image_type") }
+        let type: OriginalImageType
+        if major == "qt  " { type = .mov }
+        else if !Set(brands).isDisjoint(with: movieBrands.union(["qt  "])) { type = .mp4 }
+        else { throw DeliveryRefusal(reason: "unsupported_image_type") }
+        guard top.contains(where: { $0.kind == "mdat" && !$0.payload.isEmpty }),
+              top.filter({ $0.kind == "moov" }).count == 1 else { throw DeliveryRefusal(reason: "invalid_image") }
+        var hasVideo = false
+        for moov in top where moov.kind == "moov" {
+            let tracks = try boxes(moov.payload).filter { $0.kind == "trak" }
+            guard (1...256).contains(tracks.count) else { throw DeliveryRefusal(reason: "invalid_image") }
+            for trak in tracks {
+                let mdia = try only(boxes(trak.payload), "mdia")
+                let media = try boxes(mdia.payload)
+                let hdlr = try only(media, "hdlr")
+                guard hdlr.payload.count >= 24 else { throw DeliveryRefusal(reason: "invalid_image") }
+                if tag(hdlr.payload.lowerBound + 8) == "vide" {
+                    let minf = try only(media, "minf")
+                    let stbl = try only(boxes(minf.payload), "stbl")
+                    let stsd = try only(boxes(stbl.payload), "stsd")
+                    guard stsd.payload.count >= 8 else { throw DeliveryRefusal(reason: "invalid_image") }
+                    let entries = try boxes(stsd.payload.lowerBound + 8..<stsd.payload.upperBound)
+                    guard uint(stsd.payload.lowerBound, 4) == 0,
+                          uint(stsd.payload.lowerBound + 4, 4) == UInt64(entries.count),
+                          (1...256).contains(entries.count) else { throw DeliveryRefusal(reason: "invalid_image") }
+                    for entry in entries {
+                        guard visualCodecs.contains(entry.kind), entry.payload.count >= 78,
+                              uint(entry.payload.lowerBound + 6, 2) > 0,
+                              uint(entry.payload.lowerBound + 24, 2) > 0,
+                              uint(entry.payload.lowerBound + 26, 2) > 0 else { throw DeliveryRefusal(reason: "invalid_image") }
+                        hasVideo = true
+                    }
+                }
+            }
+        }
+        guard hasVideo else { throw DeliveryRefusal(reason: "invalid_image") }
+        return type
+    }
 }
 
 struct OriginalImage {
@@ -147,6 +234,7 @@ protocol DeliveryAdapter: AnyObject {
     var now: TimeInterval { get }
     var clipboardOwned: Bool { get }
     var clipboardRead: Bool? { get }
+    var stagedAttachmentName: String? { get }
     func observe() throws -> ComposerSnapshot
     func prepare() throws
     func stage(_ image: OriginalImage) throws
@@ -154,6 +242,8 @@ protocol DeliveryAdapter: AnyObject {
     func restore() -> String
     func wait(_ interval: TimeInterval)
 }
+
+extension DeliveryAdapter { var stagedAttachmentName: String? { nil } }
 
 enum DeliveryEngine {
     static func runBatch(images: [OriginalImage], adapter: DeliveryAdapter, timeout: TimeInterval = 8,
@@ -264,8 +354,14 @@ enum DeliveryEngine {
                     return outcome("uncertain", "existing_attachment_disappeared")
                 }
                 let added = current.attachments.reduce(0) { $0 + max(0, $1.value - before.attachments[$1.key, default: 0]) }
-                let addedImages = current.attachments.reduce(0) {
-                    $0 + (OriginalImageType.supportedExtensions.contains(URL(fileURLWithPath: $1.key).pathExtension.lowercased()) ? max(0, $1.value - before.attachments[$1.key, default: 0]) : 0)
+                let addedImages = current.attachments.reduce(0) { total, attachment in
+                    let expected: Bool
+                    if image.type.isVideo {
+                        expected = adapter.stagedAttachmentName.map { attachment.key == "Remove " + $0 && URL(fileURLWithPath: $0).pathExtension.lowercased() == image.type.fileExtension } ?? false
+                    } else {
+                        expected = OriginalImageType.supportedImageExtensions.contains(URL(fileURLWithPath: attachment.key).pathExtension.lowercased())
+                    }
+                    return total + (expected ? max(0, attachment.value - before.attachments[attachment.key, default: 0]) : 0)
                 }
                 guard added <= 1 else { return outcome("uncertain", "unexpected_multiple_attachments") }
                 stableSamples = added == 1 && addedImages == 1 ? stableSamples + 1 : 0
@@ -304,6 +400,7 @@ private final class BatchBoundAdapter: DeliveryAdapter {
     var now: TimeInterval { base.now }
     var clipboardOwned: Bool { base.clipboardOwned }
     var clipboardRead: Bool? { base.clipboardRead }
+    var stagedAttachmentName: String? { base.stagedAttachmentName }
     func observe() throws -> ComposerSnapshot {
         let current = try base.observe()
         guard current.target == anchor.target else { throw DeliveryRefusal(reason: "batch_target_changed") }

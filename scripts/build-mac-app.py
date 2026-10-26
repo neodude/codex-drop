@@ -70,7 +70,7 @@ def main():
         executables = contents / 'MacOS'
         resources.mkdir(parents=True); executables.mkdir()
         (resources / 'receiver').mkdir()
-        for name in ('mac_receiver.py', 'lan_receiver.py', 'runtime_storage.py'):
+        for name in ('mac_receiver.py', 'lan_receiver.py', 'runtime_storage.py', 'video_container.py'):
             shutil.copy2(ROOT / 'receiver' / name, resources / 'receiver' / name)
         shutil.copy2(ROOT / 'iphone/Share/Assets.xcassets/DropMark.imageset/DropMark.png', resources / 'DropMark.png')
         cache = staging / 'swift-cache'
@@ -94,7 +94,7 @@ def main():
         (contents / 'Info.plist').write_bytes(plistlib.dumps(info))
         inputs = ['macos/ReceiverController.swift', 'macos/AppPresentation.swift', 'macos/CodexDropApp.swift', 'macos/StatusWindowView.swift', 'macos/Info.plist',
                   'receiver/DeliveryCore.swift', 'receiver/MacPlatform.swift', 'receiver/ReceiverMain.swift',
-                  'receiver/PairingWindow.swift', 'receiver/mac_receiver.py', 'receiver/lan_receiver.py', 'receiver/runtime_storage.py',
+                  'receiver/PairingWindow.swift', 'receiver/mac_receiver.py', 'receiver/lan_receiver.py', 'receiver/runtime_storage.py', 'receiver/video_container.py',
                   'assets/CodexDrop-icon.png', 'iphone/Share/Assets.xcassets/DropMark.imageset/DropMark.png', 'scripts/build-mac-app.py', 'scripts/build_config.py']
         manifest = {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest() for name in inputs}
         (resources / 'BuildManifest.json').write_text(json.dumps(manifest, indent=2) + '\n')

@@ -39,17 +39,17 @@ import UIKit
         ])
         switch scenario {
         case "finding":
-            sheet.render(status: "Finding your Mac…", detail: "Your Mac will add all 3 images\nto the current draft.", stage: 0)
+            sheet.render(status: "Finding your Mac…", detail: "Your Mac will add all 3 files\nto the current draft.", stage: 0)
         case "confirming":
             sheet.render(status: "Confirming attachments…", detail: "You can close this sheet. Delivery will continue on your Mac.", stage: 2, buttonTitle: "Close")
         case "unpaired":
             sheet.render(title: "Pair your Mac", status: "One quick setup", detail: "Open Codex Drop on your iPhone and scan the Mac’s pairing code, then share again.", stage: nil, working: false, buttonTitle: "Close")
         case "blocked":
-            sheet.render(title: "Check your Mac", status: "Attachment needs review", detail: "1 of 3 images verified attached.\nImage 2: blocked before attachment.\nImage 3: not tried.\n\nCheck Codex before sharing again. Don’t resend images already attached. No automatic retry.", stage: nil, working: false, buttonTitle: "Close")
+            sheet.render(title: "Check your Mac", status: "Attachment needs review", detail: "1 of 3 files verified attached.\nFile 2: blocked before attachment.\nFile 3: not tried.\n\nCheck Codex before sharing again. Don’t resend files already attached. No automatic retry.", stage: nil, working: false, buttonTitle: "Close")
         case "uncertain":
-            sheet.render(title: "Check your Mac", status: "Attachment isn’t confirmed", detail: "Some images may already be attached. Check Codex before sharing again. Don’t resend images already attached. No automatic retry.", stage: nil, working: false, buttonTitle: "Close")
+            sheet.render(title: "Check your Mac", status: "Attachment isn’t confirmed", detail: "Some files may already be attached. Check Codex before sharing again. Don’t resend files already attached. No automatic retry.", stage: nil, working: false, buttonTitle: "Close")
         default:
-            sheet.render(status: "Uploading screenshot 2 of 3", detail: "Your Mac will add all 3 images\nto the current draft.", stage: 1)
+            sheet.render(status: "Uploading file 2 of 3", detail: "Your Mac will add all 3 files\nto the current draft.", stage: 1)
         }
         sheet.closeButton.addAction(UIAction { [weak self] _ in self?.sheet.isHidden = true }, for: .touchUpInside)
     }

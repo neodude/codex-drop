@@ -180,6 +180,7 @@ final class ClipboardLease {
     let saved: [[NSPasteboard.PasteboardType: Data]]
     let initialCount: Int
     var ownedCount: Int?
+    private(set) var stagedAttachmentName: String?
     var owned: Bool { ownedCount != nil && pasteboard.changeCount == ownedCount }
 
     init(_ pasteboard: NSPasteboard) throws {
@@ -244,6 +245,7 @@ final class ClipboardLease {
     }
     func stage(_ image: OriginalImage) throws {
         let snapshot = try persistOriginalSnapshot(image)
+        stagedAttachmentName = snapshot.lastPathComponent
         guard pasteboard.changeCount == initialCount else { throw DeliveryRefusal(reason: "clipboard_changed_before_stage") }
         let item = NSPasteboardItem()
         // File-copy semantics only: raw bitmap types let Chromium transcode the image.
@@ -650,6 +652,7 @@ final class MacDeliveryAdapter: DeliveryAdapter {
             wait(testStageHold)
         }
     }
+    var stagedAttachmentName: String? { lease?.stagedAttachmentName }
     func paste() throws {
         guard !cancelled else { throw DeliveryRefusal(reason: "interrupted_before_paste") }
         guard let expected = lastSnapshot else { throw DeliveryRefusal(reason: "missing_target_snapshot") }

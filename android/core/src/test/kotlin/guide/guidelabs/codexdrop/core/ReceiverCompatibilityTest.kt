@@ -3,16 +3,29 @@ package guide.guidelabs.codexdrop.core
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.*
 import org.junit.Test
+import org.junit.Rule
+import org.junit.rules.TemporaryFolder
 import java.io.File
 import java.net.InetAddress
+import java.security.MessageDigest
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 
 class ReceiverCompatibilityTest {
+    @get:Rule val temporary = TemporaryFolder()
     @Test fun stagedBatchAndReceiptRoundTripThroughTheExistingPythonReceiver() = runBlocking {
         val root = File(System.getProperty("codexDrop.repoRoot"))
         val script = File(root, "android/core/src/test/resources/receiver_fixture.py")
-        val process = ProcessBuilder("python3", script.absolutePath, root.absolutePath).redirectError(ProcessBuilder.Redirect.INHERIT).start()
+        val audit = temporary.newFile("receiver-audit.json")
+        val builder = ProcessBuilder("python3", script.absolutePath, root.absolutePath).redirectError(ProcessBuilder.Redirect.INHERIT)
+        builder.environment()["CODEX_DROP_FIXTURE_AUDIT"] = audit.absolutePath
+        val process = builder.start()
+        val originals = listOf(
+            javaClass.getResourceAsStream("/synthetic-video.mp4")!!.use { it.readBytes() },
+            File(root, "test-image.png").readBytes(),
+            javaClass.getResourceAsStream("/synthetic-video.mov")!!.use { it.readBytes() },
+        )
+        val mixedId = UUID.randomUUID().toString()
         try {
             val raw = process.inputStream.bufferedReader().readLine() ?: error("Isolated receiver failed to start")
             val config = StrictJson.objectValue(raw.toByteArray())
@@ -27,6 +40,10 @@ class ReceiverCompatibilityTest {
                 assertTrue(savedBeforeCommit)
                 assertTrue(result.allVerified(3))
                 assertEquals(3, client.lookup(id).verifiedCount)
+
+                val mixed = client.attach(originals.size, mixedId, prepare = { originals[it] })
+                assertTrue(mixed.allVerified(originals.size))
+                assertEquals(originals.size, client.lookup(mixedId).verifiedCount)
 
                 // A valid HEIC remains unchanged on the phone and must be refused as an image by the receiver.
                 val rejectedId = UUID.randomUUID().toString()
@@ -50,5 +67,11 @@ class ReceiverCompatibilityTest {
             if (!process.waitFor(10, TimeUnit.SECONDS)) { process.destroyForcibly(); error("Isolated receiver fixture did not stop") }
             assertEquals(0, process.exitValue())
         }
+        val report = StrictJson.objectValue(audit.readBytes())
+        val deliveries = report["deliveries"] as List<*>
+        val mixed = deliveries.map { it as Map<*, *> }.single { it["id"] == mixedId }
+        assertEquals(listOf(0, 1, 2), (mixed["indices"] as List<*>).map { (it as Number).toInt() })
+        val hashes = originals.map { bytes -> MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) } }
+        assertEquals("Receiver stored complete MP4/image/MOV originals in selection order", hashes, mixed["sha256"])
     }
 }

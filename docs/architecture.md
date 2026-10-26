@@ -31,3 +31,7 @@ Startup and daily maintenance expire eligible receiver-owned image, result, mani
 The local Mac bundle contains signed native helpers and receiver Python sources, but uses an external Python executable and records a stable source checkout path. The current distribution is a native-architecture development build for macOS 26.0+, not a standalone Python runtime, universal binary, or notarized release.
 
 The app runs without a Dock icon or status item. Closing its window keeps it running; Quit confirms and waits for active delivery. Login startup is optional and hidden. See [development](development.md) for isolated checks and the distinction between build evidence and live delivery.
+
+## Video files
+
+MP4/MOV shares use the same original-file upload, queue, file-URL Paste, clipboard ownership/restoration and no-retry policy as images. Python and Swift independently check bounded ISO BMFF metadata, requiring a video track, a supported visual sample description and nonempty media data. Video verification requires the exact newly staged filename while preserving the draft and existing attachments. Legacy API names such as `images`, `/v1/screenshots` and batch `/images/` remain for compatibility; they now also carry supported video files. The limits remain 50 MiB per file, 100 MiB per batch and 1–10 files.

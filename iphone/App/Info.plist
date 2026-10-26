@@ -32,7 +32,7 @@
 	<key>NSCameraUsageDescription</key>
 	<string>Scan the private pairing QR code shown by your Mac.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Find your paired Mac and attach screenshots to its focused Codex composer.</string>
+	<string>Find your paired Mac and attach images and videos to its focused Codex composer.</string>
 	<key>SharedKeychainGroup</key>
 	<string>$(AppIdentifierPrefix)$(CODEX_DROP_KEYCHAIN_GROUP_SUFFIX)</string>
 	<key>UIApplicationSceneManifest</key>

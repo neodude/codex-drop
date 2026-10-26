@@ -45,6 +45,24 @@ class ImagePreparationTest {
         assertNoTemporaryImages()
         return bytes
     }
+    @Test fun originalMoviesIncludingGenericAndUnknownProviderTypesKeepEveryByte(): Unit = runBlocking {
+        for (name in listOf("original.mp4", "original.mov", "generic-original.mp4", "unknown-original.mov")) unchanged(name)
+    }
+    @Test fun videoLimitsAndUnsupportedProviderTypesLeaveNoSpool(): Unit = runBlocking {
+        for (name in listOf("over-limit.mp4", "unsupported.pdf", "unsupported.webm")) {
+            assertThrows(DropFailure::class.java) { runBlocking { preparer.prepare(uri(name)) } }
+            assertNoTemporaryImages()
+        }
+    }
+    @Test fun movieCancellationUnlinksSpoolWhileProviderIsBlocked(): Unit = runBlocking {
+        val job = launch { preparer.prepare(uri("blocked.mp4")) }
+        withTimeout(2_000) { while (!folder.isDirectory) delay(10) }
+        delay(100)
+        assertTrue(job.isActive)
+        assertNoTemporaryImages()
+        job.cancelAndJoin()
+        assertNoTemporaryImages()
+    }
     @Test fun ordinaryCameraPngAndJpegAreUnchanged(): Unit = runBlocking {
         unchanged("camera.png")
         val jpeg = unchanged("camera.jpg")

@@ -9,6 +9,8 @@ final class BatchFakeAdapter: DeliveryAdapter {
     var pastes = 0, restores = 0
     var scenario = "success"
     var attached = ["Remove image.png": 2, "Remove existing.pdf": 1]
+    var stagedAttachmentName: String? = nil
+    var stagedTypes: [OriginalImageType] = []
     private var pastedAt: TimeInterval = 0
     private var acknowledged = false
     func observe() throws -> ComposerSnapshot {
@@ -17,7 +19,7 @@ final class BatchFakeAdapter: DeliveryAdapter {
             throw DeliveryRefusal(reason: "composer_changed_during_focus", diagnostics: ["draftSame": "false", "windowObjectSame": "true"])
         }
         if pastes > 0 && !acknowledged && now - pastedAt >= 0.1 && !(scenario == "uncertain_second" && pastes == 2) {
-            attached["Remove image.png", default: 0] += 1; acknowledged = true
+            attached["Remove " + (stagedAttachmentName ?? "image.png"), default: 0] += 1; acknowledged = true
         }
         return ComposerSnapshot(target: scenario == "target_between" && restores > 0 ? "other" : "original",
             draft: Data((scenario == "draft_between" && restores > 0 ? "edited" : "existing draft").utf8),
@@ -26,7 +28,9 @@ final class BatchFakeAdapter: DeliveryAdapter {
     func prepare() throws {
         if scenario == "cancel_second" && restores > 0 { throw DeliveryRefusal(reason: "interrupted") }
     }
-    func stage(_ image: OriginalImage) throws { clipboardOwned = true }
+    func stage(_ image: OriginalImage) throws {
+        clipboardOwned = true; stagedAttachmentName = "image." + image.type.fileExtension; stagedTypes.append(image.type)
+    }
     func paste() throws { pastes += 1; pastedAt = now; acknowledged = false }
     func restore() -> String {
         restores += 1
@@ -49,6 +53,8 @@ final class FakeAdapter: DeliveryAdapter {
     var staged = false
     var scenario = "success"
     var attachmentExtension = "png"
+    var stagedNameOverride: String? = nil
+    var stagedAttachmentName: String? { stagedNameOverride ?? "image." + attachmentExtension }
     var originalDraft = "draft\n🧗"
     var existing = ["Remove existing.pdf": 1]
 
@@ -108,10 +114,24 @@ final class FakeAdapter: DeliveryAdapter {
             checks += 1
         }
         let fixtureImage = OriginalImage(data: Data([1]), fileURL: URL(fileURLWithPath: "/fixture/image.png"), type: .png)
+        for suffix in ["mp4", "mov"] {
+            guard let videoType = OriginalImageType(rawValue: suffix) else {
+                try check(false, "video original type is available: \(suffix)"); return
+            }
+            let video = OriginalImage(data: Data([1]), fileURL: URL(fileURLWithPath: "/fixture/source." + suffix), type: videoType)
+            let adapter = FakeAdapter(); adapter.attachmentExtension = suffix
+            try check(DeliveryEngine.run(image: video, adapter: adapter).status == "verified", "expected video attachment is acknowledged")
+            let wrongAdapter = FakeAdapter(); wrongAdapter.attachmentExtension = "png"
+            try check(DeliveryEngine.run(image: video, adapter: wrongAdapter).status == "uncertain", "an image cannot acknowledge video delivery")
+            let renamedAdapter = FakeAdapter(); renamedAdapter.attachmentExtension = suffix; renamedAdapter.stagedNameOverride = "other." + suffix
+            try check(DeliveryEngine.run(image: video, adapter: renamedAdapter).status == "uncertain", "a different video filename cannot acknowledge the staged original")
+            let draftAdapter = FakeAdapter(); draftAdapter.attachmentExtension = suffix; draftAdapter.scenario = "draft_after"
+            try check(DeliveryEngine.run(image: video, adapter: draftAdapter).reason == "draft_changed_after_paste", "video file mentions cannot bypass unchanged draft guards")
+        }
         try check(ImageLimits.maxBytes == 50 * 1024 * 1024, "original encoded input accepts up to exactly 50 MiB")
         try check(ImageLimits.maxBatchBytes == 100 * 1024 * 1024 && ImageLimits.maxBatchCount == 10,
                   "batch byte and count limits remain 100 MiB and ten")
-        for suffix in OriginalImageType.supportedExtensions {
+        for suffix in OriginalImageType.supportedImageExtensions {
             let originalAdapter = FakeAdapter(); originalAdapter.attachmentExtension = suffix
             let receipt = DeliveryEngine.run(image: fixtureImage, adapter: originalAdapter)
             try check(receipt.status == "verified" && originalAdapter.pastes == 1,
@@ -278,6 +298,14 @@ final class FakeAdapter: DeliveryAdapter {
             try check(batchAdapter.pastes == count && batchAdapter.restores == count && intents == Array(0..<count), "\(count) images each pasted once with durable ordered intent")
             try check(batchAdapter.attached["Remove image.png"] == 2 + count && batchAdapter.attached["Remove existing.pdf"] == 1, "duplicate image names and existing attachments preserved")
         }
+        let mixedFiles = [fixtureImage, OriginalImage(data: Data([2]), fileURL: URL(fileURLWithPath: "/fixture/video.mp4"), type: .mp4),
+                          OriginalImage(data: Data([3]), fileURL: URL(fileURLWithPath: "/fixture/video.mov"), type: .mov), fixtureImage]
+        let mixedAdapter = BatchFakeAdapter()
+        let mixedResult = DeliveryEngine.runBatch(images: mixedFiles, adapter: mixedAdapter)
+        try check(mixedResult.status == "verified" && mixedResult.verifiedCount == 4 && mixedAdapter.stagedTypes == [.png, .mp4, .mov, .png], "mixed image and video batch preserves order and acknowledgement")
+        let stoppedMixedAdapter = BatchFakeAdapter(); stoppedMixedAdapter.scenario = "uncertain_second"
+        let stoppedMixed = DeliveryEngine.runBatch(images: mixedFiles, adapter: stoppedMixedAdapter)
+        try check(stoppedMixed.status == "uncertain" && stoppedMixed.verifiedCount == 1 && stoppedMixedAdapter.pastes == 2 && stoppedMixedAdapter.stagedTypes == [.png, .mp4], "mixed batch stops on an unacknowledged video without replay or later Paste")
         for scenario in ["target_between", "draft_between", "previous_image_lost", "uncertain_second", "clipboard_second", "cancel_second", "screen_locked_between"] {
             let batchAdapter = BatchFakeAdapter(); batchAdapter.scenario = scenario
             let batch = DeliveryEngine.runBatch(images: Array(repeating: fixtureImage, count: 3), adapter: batchAdapter)

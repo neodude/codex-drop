@@ -19,8 +19,8 @@ sealed interface TransferProgress {
 }
 
 fun validateImageBytes(bytes: ByteArray) {
-    if (bytes.isEmpty()) throw DropFailure("The shared image is empty. Share it again from Photos.")
-    if (bytes.size > MAX_IMAGE_BYTES) throw DropFailure("Each image must be at most 50 MiB.")
+    if (bytes.isEmpty()) throw DropFailure("The shared file is empty. Share it again from Photos.")
+    if (bytes.size > MAX_IMAGE_BYTES) throw DropFailure("Each file must be at most 50 MiB.")
 }
 
 class BatchClient(private val transport: Transport, private val pollTimeoutMillis: Long = 120_000, private val nowMillis: () -> Long = { System.nanoTime() / 1_000_000 }) {
@@ -36,7 +36,7 @@ class BatchClient(private val transport: Transport, private val pollTimeoutMilli
         } catch (_: Exception) { throw DropFailure("The Mac returned an invalid receipt. Check attachments before sharing again.", true) }
     }
     suspend fun attach(count: Int, id: String, prepare: suspend (Int) -> ByteArray, beforeCommit: suspend () -> Unit = {}, progress: (TransferProgress) -> Unit = {}): DeliveryJob {
-        if (count !in 1..10 || !validId(id)) throw DropFailure("Share 1–10 images in one new request.")
+        if (count !in 1..10 || !validId(id)) throw DropFailure("Share 1–10 files in one new request.")
         var commitStarted = false
         try {
             currentCoroutineContext().ensureActive()
@@ -66,7 +66,7 @@ class BatchClient(private val transport: Transport, private val pollTimeoutMilli
             val deadline = nowMillis() + pollTimeoutMillis
             while (job.state in setOf("queued", "running")) {
                 val remaining = deadline - nowMillis()
-                if (remaining <= 0) throw DropFailure("The Mac received the images, but attachment is not confirmed. Check Codex before sharing again.", true)
+                if (remaining <= 0) throw DropFailure("The Mac received the files, but attachment is not confirmed. Check Codex before sharing again.", true)
                 delay(minOf(180, remaining))
                 if (nowMillis() >= deadline) throw DropFailure("Attachment confirmation timed out. Check Codex before sharing again.", true)
                 job = lookup(id)
@@ -75,9 +75,9 @@ class BatchClient(private val transport: Transport, private val pollTimeoutMilli
             return job
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (error: Exception) {
-            if (commitStarted) throw DropFailure("Attachment isn’t confirmed. Some images may already be attached. Check Codex before sharing again. No automatic retry.", true)
+            if (commitStarted) throw DropFailure("Attachment isn’t confirmed. Some files may already be attached. Check Codex before sharing again. No automatic retry.", true)
             if (error is DropFailure) throw error
-            throw DropFailure("The transfer was interrupted before attachment. Check the receiver, Wi-Fi and image limits.")
+            throw DropFailure("The transfer was interrupted before attachment. Check the receiver, Wi-Fi and file limits.")
         }
     }
     private fun receipt(response: HttpReply, id: String): DeliveryJob {
@@ -94,7 +94,7 @@ class BatchClient(private val transport: Transport, private val pollTimeoutMilli
             val error = runCatching { StrictJson.objectValue(response.body) }.getOrNull()
             if (error?.get("error") == "unsupported_image_format") {
                 val message = (error["message"] as? String)?.takeIf { it.length in 1..512 && it.isNotBlank() && it.none(Char::isISOControl) }
-                    ?: "Codex accepts JPEG, PNG, GIF and WebP image inputs. Share one of those formats instead."
+                    ?: "Codex accepts JPEG, PNG, GIF, WebP, MP4 and MOV files. Share one of those formats instead."
                 throw DropFailure(message)
             }
             throw DropFailure("The Mac refused the request. Check the receiver before sharing again. No automatic retry.")

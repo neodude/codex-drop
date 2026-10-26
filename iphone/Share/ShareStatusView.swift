@@ -131,7 +131,7 @@ import UIKit
             closeButton.heightAnchor.constraint(greaterThanOrEqualToConstant: 48),
             closeButton.bottomAnchor.constraint(equalTo: safeAreaLayoutGuide.bottomAnchor, constant: -20)
         ])
-        render(status: "Preparing screenshots…", detail: "", stage: 0)
+        render(status: "Preparing files…", detail: "", stage: 0)
     }
     required init?(coder: NSCoder) { fatalError("Use init(frame:)") }
 
@@ -147,7 +147,7 @@ import UIKit
             dot.tintColor = complete ? DropBrand.mint : index == stage ? DropBrand.aquamarine : UIColor(white: 0.4, alpha: 1)
         }
         if let stage {
-            stages.accessibilityLabel = ["Find your Mac", "Transfer images", "Attach to draft"].enumerated().map { index, label in
+            stages.accessibilityLabel = ["Find your Mac", "Transfer files", "Attach to draft"].enumerated().map { index, label in
                 "\(label): \(index < stage ? "complete" : index == stage ? "in progress" : "waiting")"
             }.joined(separator: ". ")
         }

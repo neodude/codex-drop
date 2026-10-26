@@ -60,11 +60,11 @@ struct PairingContentView<PasteControl: View>: View {
                 } footer: {
                     if !isPaired { Text("Find the pairing QR code in Codex Drop on your Mac. You can also paste its pairing code.") }
                 }
-                Section("Share images") {
+                Section("Share images and videos") {
                     Label {
-                        Text("Select 1–10 images on your iPhone, then choose Share → Codex Drop.")
+                        Text("Select 1–10 images or videos on your iPhone, then choose Share → Codex Drop.")
                     } icon: { Image(systemName: "square.and.arrow.up") }
-                    Text("Codex opens on your Mac and the images attach to the current draft.")
+                    Text("Codex opens on your Mac and the files attach to the current draft.")
                     Text("Keep your Mac awake and unlocked, with Codex Drop running. Use the same Wi-Fi and allow Local Network access when asked.")
                         .foregroundStyle(.secondary)
                 }
@@ -76,7 +76,7 @@ struct PairingContentView<PasteControl: View>: View {
                     Section("Last share timing") {
                         ForEach(["Preparing images", "Finding Mac", "Upload", "Confirmation", "Total"], id: \.self) { phase in
                             if let milliseconds = timings[phase] {
-                                LabeledContent(phase, value: String(format: "%.2f s", Double(milliseconds) / 1000))
+                                LabeledContent(phase == "Preparing images" ? "Preparing files" : phase, value: String(format: "%.2f s", Double(milliseconds) / 1000))
                             }
                         }
                     }

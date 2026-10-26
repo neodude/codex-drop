@@ -1,8 +1,8 @@
 # Codex Drop
 
-Share screenshots from your iPhone or Android phone into a Codex draft on your Mac.
+Share screenshots and recordings from your iPhone or Android phone into a Codex draft on your Mac.
 
-Choose 1–10 images, share them to Codex Drop, and keep working. The Mac brings the running Codex app forward, attaches the images to the last active conversation, and leaves the message unsent. Existing draft text and attachments are preserved. If the receiver cannot establish a safe destination or verify an attachment, it stops for review.
+Choose 1–10 images or videos, share them to Codex Drop, and keep working. The Mac brings the running Codex app forward, attaches the files to the last active conversation, and leaves the message unsent. Existing draft text and attachments are preserved. If the receiver cannot establish a safe destination or verify an attachment, it stops for review.
 
 Codex Drop is an independent utility, not an official OpenAI product or an OpenAI-endorsed integration. This repository provides source for local development builds. Store releases and notarized Mac downloads are not provided.
 
@@ -11,11 +11,11 @@ Codex Drop is an independent utility, not an official OpenAI product or an OpenA
 1. Run Codex and Codex Drop on an awake, unlocked Mac.
 2. Pair your phone by scanning the QR in **Pair Phone…** over the same Wi-Fi.
 3. Select the intended conversation in Codex. You can then use another Mac app.
-4. On your phone, select images and choose **Share → Codex Drop**. A verified share closes automatically.
+4. On your phone, select images or recordings and choose **Share → Codex Drop**. A verified share closes automatically.
 
-The phone stages the complete batch over paired HTTPS before attachment starts. The Mac attaches images in order and **never presses Send**. An interrupted or uncertain share is never retried automatically; inspect the draft before sharing again. A new share can proceed while an older blocked or uncertain result remains in history.
+The phone stages the complete batch over paired HTTPS before attachment starts. The Mac attaches files in order and **never presses Send**. An interrupted or uncertain share is never retried automatically; inspect the draft before sharing again. A new share can proceed while an older blocked or uncertain result remains in history.
 
-Codex Drop copies the exact image-file bytes supplied by the sharing app: no conversion, resizing, recompression, rotation, color changes, or metadata stripping. Limits are **50 MiB per file, 100 MiB per batch, and 10 images**; there is no pixel quota. Only JPEG, PNG, GIF and WebP are accepted, matching Codex’s recognized image formats. HEIC/HEIF and other unsupported formats are refused before attachment, without conversion or a generic-file fallback. Source apps such as Photos may supply an edited/exported representation before Codex Drop receives it.
+Codex Drop copies the exact file bytes supplied by the sharing app: no conversion, resizing, recompression, rotation, color changes, metadata stripping, or removal of audio. Limits are **50 MiB per file, 100 MiB per batch, and 10 files**. Images can be JPEG, PNG, GIF or WebP; recordings can be MP4 or QuickTime MOV containing a supported video track. HEIC/HEIF, audio-only recordings, and unsupported formats are refused before attachment. Source apps such as Photos may supply an edited/exported representation before Codex Drop receives it. Video is attached as an original local file; Codex and its available tools determine how it is inspected.
 
 No OpenAI API key, hosted server, or cloud relay is required. Codex itself may stage or upload attachments before you send the message. An unsent draft does not mean no cloud processing has occurred.
 
@@ -24,7 +24,7 @@ No OpenAI API key, hosted server, or cloud relay is required. Codex itself may s
 | Component | Requirement |
 | --- | --- |
 | Mac receiver | macOS 26.0+, running Codex desktop app, Accessibility permission, same reachable Wi-Fi as the phone |
-| Apple build tools | Compatible Xcode and Swift toolchains for the configured SDK targets; Python with TLS and SQLite; XcodeGen for iPhone |
+| Apple build tools | Xcode with support for the configured SDK targets and required Swift concurrency features; Python 3.10+ with TLS and SQLite; XcodeGen for iPhone |
 | Apple signing | Your own Apple Development certificate and team; see below |
 | iPhone | iOS 18.0+; signed app and share extension |
 | Android phone | Android 9 / API 28+; Google Play services for QR scanning |

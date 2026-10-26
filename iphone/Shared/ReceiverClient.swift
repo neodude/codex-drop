@@ -30,7 +30,7 @@ struct DeliveryJob: Decodable, Sendable {
     var userMessage: String {
         let permissionNeeded = result?.reason == "accessibility_permission_required" || result?.items?.contains { $0.reason == "accessibility_permission_required" } == true
         let unlockNeeded = result?.reason == "mac_screen_locked" || result?.items?.contains { $0.reason == "mac_screen_locked" } == true
-        let unlockHelp = "Unlock your Mac to attach screenshots."
+        let unlockHelp = "Unlock your Mac to attach files."
         let permissionHelp = "Allow Codex Drop in Mac System Settings → Privacy & Security → Accessibility, then share again."
         let reasons = ([result?.reason] + (result?.items?.map(\.reason) ?? [])).compactMap { $0 }
         let causeHelp: String? = reasons.contains("clipboard_snapshot_incomplete")
@@ -43,24 +43,24 @@ struct DeliveryJob: Decodable, Sendable {
               items.count == count, items.map(\.index).sorted() == Array(0..<count),
               items.filter({ $0.status == "verified" }).count == verified else {
             return (unlockNeeded ? unlockHelp + "\n" : "") + (permissionNeeded ? permissionHelp + "\n" : "") +
-                (causeHelp.map { $0 + "\n" } ?? "") + "Delivery needs review on the Mac. Images may already be attached. Check before sharing again. No automatic retry."
+                (causeHelp.map { $0 + "\n" } ?? "") + "Delivery needs review on the Mac. Files may already be attached. Check before sharing again. No automatic retry."
         }
-        if allVerified(count: count) { return "Attached \(count) \(count == 1 ? "image" : "images"). Message not sent." }
+        if allVerified(count: count) { return "Attached \(count) \(count == 1 ? "file" : "files"). Message not sent." }
         var lines = unlockNeeded ? [unlockHelp] : []
         if let causeHelp { lines.append(causeHelp) }
-        lines.append("\(verified) of \(count) images verified attached.")
+        lines.append("\(verified) of \(count) files verified attached.")
         for item in items.sorted(by: { $0.index < $1.index }) where item.status != "verified" {
             switch item.status {
-            case "uncertain": lines.append("Image \(item.index + 1): uncertain; it may already be attached.")
+            case "uncertain": lines.append("File \(item.index + 1): uncertain; it may already be attached.")
             case "blocked": lines.append(item.pasteAttempted == false
-                ? "Image \(item.index + 1): blocked before attachment."
-                : "Image \(item.index + 1): unconfirmed; check whether it is attached.")
-            case "not_attempted": lines.append("Image \(item.index + 1): not tried.")
-            default: lines.append("Image \(item.index + 1): needs review on the Mac.")
+                ? "File \(item.index + 1): blocked before attachment."
+                : "File \(item.index + 1): unconfirmed; check whether it is attached.")
+            case "not_attempted": lines.append("File \(item.index + 1): not tried.")
+            default: lines.append("File \(item.index + 1): needs review on the Mac.")
             }
         }
         if permissionNeeded { lines.append(permissionHelp) }
-        lines.append("Check the Mac before sharing again. Do not resend images already attached. No automatic retry.")
+        lines.append("Check the Mac before sharing again. Do not resend files already attached. No automatic retry.")
         return lines.joined(separator: "\n")
     }
 }
@@ -215,7 +215,7 @@ final class PinnedSessionDelegate: NSObject, URLSessionDelegate, URLSessionTaskD
                      progress: @escaping @MainActor (BatchProgress) -> Void = { _ in },
                      timing: @escaping @MainActor (String, Int) -> Void = { _, _ in }) async throws -> DeliveryJob {
         guard (1...10).contains(count), UUID(uuidString: id)?.uuidString.lowercased() == id else {
-            throw ReceiverError.message("Share 1–10 images in one new request.")
+            throw ReceiverError.message("Share 1–10 files in one new request.")
         }
         try Task.checkCancellation()
         struct Receipt: Decodable { let received: Bool; let job: DeliveryJob }
@@ -228,8 +228,8 @@ final class PinnedSessionDelegate: NSObject, URLSessionDelegate, URLSessionTaskD
                     if let message = code?["message"] as? String, !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                         throw ReceiverError.unsupportedImageFormat(message)
                     }
-                    throw ReceiverError.unsupportedImageFormat("This image format is not supported. Share JPEG, PNG, GIF, or WebP. In Photos, choose Automatic or Most Compatible.")
-                case "invalid_image", "unsupported_image", "invalid_png": throw ReceiverError.message("The Mac could not read this original image or does not support its format.")
+                    throw ReceiverError.unsupportedImageFormat("This file format is not supported. Share JPEG, PNG, GIF, or WebP images, or MP4/MOV videos. In Photos, choose Automatic or Most Compatible.")
+                case "invalid_image", "unsupported_image", "invalid_png": throw ReceiverError.message("The Mac could not read this original file or does not support its format.")
                 default: throw ReceiverError.message("The Mac refused the request (HTTP \(response.1)). No automatic retry.")
                 }
             }

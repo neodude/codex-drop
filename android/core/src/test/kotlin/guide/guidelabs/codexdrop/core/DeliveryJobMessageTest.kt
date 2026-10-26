@@ -17,7 +17,7 @@ class DeliveryJobMessageTest {
         val message = job.reviewMessage()
         assertTrue(message.startsWith("Unlock your Mac"))
         assertTrue(message.contains("1 of 2"))
-        assertTrue(message.contains("Don’t resend images already attached"))
+        assertTrue(message.contains("Don’t resend files already attached"))
     }
     @Test fun missingResultCanExplainLockWithoutClaimingAttachment() {
         val job = DeliveryJob(TEST_ID,"blocked",null,null,null,"mac_screen_locked")

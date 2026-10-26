@@ -34,7 +34,7 @@ def main():
     require(Path(info['CodexDropPythonExecutable']).is_file(), 'Rebuild with an installed Python runtime')
     for private in ('receiver-data', 'pairing-code.txt', '*.log'):
         require(not list(app.rglob(private)), f'Private runtime file in bundle: {private}')
-    for name in ('MacAttachmentReceiver', 'ReceiverPairing', 'CodexDrop.icns', 'receiver/mac_receiver.py', 'receiver/lan_receiver.py', 'receiver/runtime_storage.py'):
+    for name in ('MacAttachmentReceiver', 'ReceiverPairing', 'CodexDrop.icns', 'receiver/mac_receiver.py', 'receiver/lan_receiver.py', 'receiver/runtime_storage.py', 'receiver/video_container.py'):
         require((resources / name).is_file(), f'Missing resource {name}')
     for name, digest in json.loads((resources / 'BuildManifest.json').read_text()).items():
         require(hashlib.sha256((ROOT / name).read_bytes()).hexdigest() == digest, f'Rebuild required after source change: {name}')

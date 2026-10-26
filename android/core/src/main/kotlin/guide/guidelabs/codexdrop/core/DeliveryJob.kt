@@ -9,9 +9,9 @@ data class DeliveryJob(val id: String, val state: String, val items: List<Delive
         items?.size == count && items.map { it.index }.sorted() == (0 until count).toList() && items.all { it.status == "verified" }
     fun reviewMessage(): String {
         val detail = if (items == null || totalCount == null || verifiedCount == null) "Attachment is not confirmed. Check Codex on your Mac before sharing again." else buildString {
-            append("$verifiedCount of $totalCount images verified attached.")
+            append("$verifiedCount of $totalCount files verified attached.")
             items.filter { it.status != "verified" }.forEach { item ->
-                append("\nImage ${item.index + 1}: ")
+                append("\nFile ${item.index + 1}: ")
                 append(when (item.status) {
                     "uncertain" -> "uncertain; it may already be attached."
                     "blocked" -> if (item.pasteAttempted == false) "blocked before attachment." else "unconfirmed; check your Mac."
@@ -22,8 +22,8 @@ data class DeliveryJob(val id: String, val state: String, val items: List<Delive
         val permission = if (reason == "accessibility_permission_required" || items?.any { it.reason == "accessibility_permission_required" } == true)
             "\nAllow Codex Drop in Mac System Settings → Privacy & Security → Accessibility." else ""
         val unlock = if (reason == "mac_screen_locked" || items?.any { it.reason == "mac_screen_locked" } == true)
-            "Unlock your Mac to attach screenshots.\n" else ""
-        return "$unlock$detail$permission\nDon’t resend images already attached. No automatic retry."
+            "Unlock your Mac to attach files.\n" else ""
+        return "$unlock$detail$permission\nDon’t resend files already attached. No automatic retry."
     }
     companion object {
         internal fun parse(fields: Map<String, Any?>): DeliveryJob {

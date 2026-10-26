@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Real HTTPS receiver, disposable state and audited fake delivery. Never native UI."""
+import hashlib
 import json
 import os
 import re
@@ -64,7 +65,7 @@ with tempfile.TemporaryDirectory(prefix='codexdrop-android-protocol-') as tempor
         count = len(job['images'])
         with lock:
             ordinal = len(deliveries)
-            deliveries.append({'time':time.monotonic(),'id':job['id'], 'count':count, 'indices':[item['index'] for item in job['images']]})
+            deliveries.append({'time':time.monotonic(),'id':job['id'], 'count':count, 'indices':[item['index'] for item in job['images']], 'sha256':[hashlib.sha256(Path(item['path']).read_bytes()).hexdigest() for item in job['images']]})
         if mode in ('partial_first','blocked_first') and ordinal == 0:
             verified = 1 if mode == 'partial_first' and count > 1 else 0
             status = 'uncertain' if mode == 'partial_first' else 'blocked'

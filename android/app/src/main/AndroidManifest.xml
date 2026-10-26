@@ -8,8 +8,8 @@
             <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter>
         </activity>
         <activity android:name=".ShareActivity" android:exported="true" android:excludeFromRecents="true">
-            <intent-filter><action android:name="android.intent.action.SEND" /><category android:name="android.intent.category.DEFAULT" /><data android:mimeType="image/*" /></intent-filter>
-            <intent-filter><action android:name="android.intent.action.SEND_MULTIPLE" /><category android:name="android.intent.category.DEFAULT" /><data android:mimeType="image/*" /></intent-filter>
+            <intent-filter><action android:name="android.intent.action.SEND" /><category android:name="android.intent.category.DEFAULT" /><data android:mimeType="image/*" /><data android:mimeType="video/mp4" /><data android:mimeType="video/quicktime" /></intent-filter>
+            <intent-filter><action android:name="android.intent.action.SEND_MULTIPLE" /><category android:name="android.intent.category.DEFAULT" /><data android:mimeType="image/*" /><data android:mimeType="video/mp4" /><data android:mimeType="video/quicktime" /><data android:mimeType="*/*" /></intent-filter>
         </activity>
     </application>
 </manifest>

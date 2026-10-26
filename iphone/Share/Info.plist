@@ -35,6 +35,14 @@
 		<dict>
 			<key>NSExtensionActivationRule</key>
 			<dict>
+				<key>NSExtensionActivationDictionaryVersion</key>
+				<integer>2</integer>
+				<key>NSExtensionActivationSupportsAttachmentsWithMinCount</key>
+				<integer>1</integer>
+				<key>NSExtensionActivationSupportsAttachmentsWithMaxCount</key>
+				<integer>10</integer>
+				<key>NSExtensionActivationSupportsMovieWithMaxCount</key>
+				<integer>10</integer>
 				<key>NSExtensionActivationSupportsImageWithMaxCount</key>
 				<integer>10</integer>
 			</dict>
@@ -45,7 +53,7 @@
 		<string>$(PRODUCT_MODULE_NAME).ShareViewController</string>
 	</dict>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Find your paired Mac and attach screenshots to its focused Codex composer.</string>
+	<string>Find your paired Mac and attach images and videos to its focused Codex composer.</string>
 	<key>SharedKeychainGroup</key>
 	<string>$(AppIdentifierPrefix)$(CODEX_DROP_KEYCHAIN_GROUP_SUFFIX)</string>
 </dict>

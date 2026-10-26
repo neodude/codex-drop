@@ -23,7 +23,7 @@ class ShareViewModel(private val gateway: DropGateway, restoredId: String? = nul
     private var started = restoredId != null
     private var work: Job? = null
     private val mutableState = MutableStateFlow(if (restoredId == null) ShareUiState() else ShareUiState(
-        title = "Share interrupted", detail = "Check Codex on your Mac. You can look up this receipt without sending the images again.", working = false, committed = true, canCheck = true))
+        title = "Share interrupted", detail = "Check Codex on your Mac. You can look up this receipt without sending the files again.", working = false, committed = true, canCheck = true))
     val state = mutableState.asStateFlow()
     fun fail(message: String) {
         if (started) return
@@ -33,7 +33,7 @@ class ShareViewModel(private val gateway: DropGateway, restoredId: String? = nul
     fun start(sources: List<String>) {
         if (started) return
         started = true
-        if (sources.size !in 1..10) { mutableState.value = ShareUiState("Choose 1–10 images", "Share screenshots or images from another app.", working = false); return }
+        if (sources.size !in 1..10) { mutableState.value = ShareUiState("Choose 1–10 files", "Share photos or videos from another app.", working = false); return }
         work = viewModelScope.launch {
             if (!gateway.slot.acquire()) { mutableState.value = ShareUiState("Another share is in progress", "Let it finish before sharing again. This share has not been queued.", working = false); return@launch }
             try {
@@ -41,7 +41,7 @@ class ShareViewModel(private val gateway: DropGateway, restoredId: String? = nul
                 var firstImage: ByteArray? = null
                 try {
                     coroutineScope {
-                        // Overlap only startup. Later images keep the existing prepare/upload order.
+                        // Overlap only startup. Later files keep the existing prepare/upload order.
                         val preparation = launch { firstImage = gateway.prepare(sources.first()) }
                         gateway.connect(pairing).use { connection ->
                             preparation.join()
@@ -54,9 +54,9 @@ class ShareViewModel(private val gateway: DropGateway, restoredId: String? = nul
                                 beforeCommit = { gateway.remember(PendingReceipt(requestId, sources.size, pairing.service, System.currentTimeMillis())) },
                                 progress = { progress ->
                                     mutableState.value = when (progress) {
-                                        is TransferProgress.Preparing -> ShareUiState("Preparing image ${progress.index + 1} of ${progress.count}", "Getting your screenshots ready…", 1)
-                                        is TransferProgress.Uploading -> ShareUiState("Sending image ${progress.index + 1} of ${progress.count}", "Transferring securely to your Mac…", 1)
-                                        TransferProgress.Committing -> ShareUiState("Attaching in Codex", "Your Mac is adding the images to the active draft…", 2, committed = true)
+                                        is TransferProgress.Preparing -> ShareUiState("Preparing file ${progress.index + 1} of ${progress.count}", "Getting your files ready…", 1)
+                                        is TransferProgress.Uploading -> ShareUiState("Sending file ${progress.index + 1} of ${progress.count}", "Transferring securely to your Mac…", 1)
+                                        TransferProgress.Committing -> ShareUiState("Attaching in Codex", "Your Mac is adding the files to the active draft…", 2, committed = true)
                                         TransferProgress.Confirming -> ShareUiState("Checking attachments", "Waiting for the Mac to verify your draft…", 2, committed = true)
                                     }
                                 })
@@ -79,7 +79,7 @@ class ShareViewModel(private val gateway: DropGateway, restoredId: String? = nul
         }
     }
     private fun showResult(result: DeliveryJob, count: Int) {
-        mutableState.value = if (result.allVerified(count)) ShareUiState("Attached", "$count images added to your draft.", 3, working = false, committed = true, finished = true)
+        mutableState.value = if (result.allVerified(count)) ShareUiState("Attached", "$count files added to your draft.", 3, working = false, committed = true, finished = true)
         else ShareUiState("Check your Mac", result.reviewMessage(), 2, working = false, committed = true, canCheck = true)
     }
     fun checkReceipt() {
@@ -87,7 +87,7 @@ class ShareViewModel(private val gateway: DropGateway, restoredId: String? = nul
         mutableState.value = mutableState.value.copy(working = true, detail = "Looking up the existing receipt…")
         work = viewModelScope.launch {
             try {
-                val receipt = gateway.receipt(requestId) ?: throw DropFailure("No saved receipt exists for this share. Check Codex on your Mac; images will not be resent.", true)
+                val receipt = gateway.receipt(requestId) ?: throw DropFailure("No saved receipt exists for this share. Check Codex on your Mac; files will not be resent.", true)
                 val pairing = gateway.pairing()?.takeIf { it.service == receipt.service } ?: throw DropFailure("Pair with the original Mac to check this receipt.", true)
                 gateway.connect(pairing).use { showResult(it.client.lookup(receipt.id), receipt.count) }
             } catch (cancelled: CancellationException) { throw cancelled }

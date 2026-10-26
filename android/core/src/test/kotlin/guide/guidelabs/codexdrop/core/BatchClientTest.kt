@@ -36,6 +36,8 @@ class BatchClientTest {
     @Test fun originalBytesAreUploadedUnchangedWithoutLocalFormatOrPixelChanges() = runBlocking {
         val originals = listOf(
             png(3024, 4032), png(40_000, 40_000),
+            javaClass.getResourceAsStream("/synthetic-video.mp4")!!.use { it.readBytes() },
+            javaClass.getResourceAsStream("/synthetic-video.mov")!!.use { it.readBytes() },
             byteArrayOf(-1,-40,-1,-31) + "Exif orientation=6 ICC original metadata".toByteArray(),
             "GIF89a original animated frames".toByteArray(),
             "RIFF original WEBP metadata".toByteArray(),
@@ -73,11 +75,11 @@ class BatchClientTest {
     }
     @Test fun unsupportedFormatFallbackIsClearWhileUnrecognizedErrorsStayGeneric() {
         val cases = listOf(
-            """{"error":"unsupported_image_format","message":"   "}""" to "Codex accepts JPEG, PNG, GIF and WebP image inputs. Share one of those formats instead.",
-            """{"error":"unsupported_image_format","message":"line\nbreak"}""" to "Codex accepts JPEG, PNG, GIF and WebP image inputs. Share one of those formats instead.",
-            """{"error":"unsupported_image_format","message":"${"x".repeat(513)}"}""" to "Codex accepts JPEG, PNG, GIF and WebP image inputs. Share one of those formats instead.",
-            """{"error":"unsupported_image_format"}""" to "Codex accepts JPEG, PNG, GIF and WebP image inputs. Share one of those formats instead.",
-            """{"error":"unsupported_image_format","message":9}""" to "Codex accepts JPEG, PNG, GIF and WebP image inputs. Share one of those formats instead.",
+            """{"error":"unsupported_image_format","message":"   "}""" to "Codex accepts JPEG, PNG, GIF, WebP, MP4 and MOV files. Share one of those formats instead.",
+            """{"error":"unsupported_image_format","message":"line\nbreak"}""" to "Codex accepts JPEG, PNG, GIF, WebP, MP4 and MOV files. Share one of those formats instead.",
+            """{"error":"unsupported_image_format","message":"${"x".repeat(513)}"}""" to "Codex accepts JPEG, PNG, GIF, WebP, MP4 and MOV files. Share one of those formats instead.",
+            """{"error":"unsupported_image_format"}""" to "Codex accepts JPEG, PNG, GIF, WebP, MP4 and MOV files. Share one of those formats instead.",
+            """{"error":"unsupported_image_format","message":9}""" to "Codex accepts JPEG, PNG, GIF, WebP, MP4 and MOV files. Share one of those formats instead.",
             """{"error":"unknown","message":"arbitrary server copy"}""" to "The Mac refused the request. Check the receiver before sharing again. No automatic retry.",
             "not JSON" to "The Mac refused the request. Check the receiver before sharing again. No automatic retry.",
         )

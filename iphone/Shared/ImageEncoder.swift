@@ -18,7 +18,7 @@ final class ImageFile: Sendable {
         let input = try FileHandle(forReadingFrom: source)
         defer { try? input.close() }
         guard FileManager.default.createFile(atPath: destination.path, contents: nil) else {
-            throw ReceiverError.message("Could not copy the shared image.")
+            throw ReceiverError.message("Could not copy the shared file.")
         }
         let output = try FileHandle(forWritingTo: destination)
         defer { try? output.close() }
@@ -75,17 +75,18 @@ final class ImageFile: Sendable {
 // It never decodes, renders, strips metadata, rotates, resizes, or re-encodes an image.
 enum ImageInput {
     static let maximumBytes = 50 * 1024 * 1024
-    static var byteLimitError: ReceiverError { .message("Each image file must be at most 50 MiB.") }
-    static var unreadableError: ReceiverError { .message("Could not read the image file supplied by the source app.") }
+    static var byteLimitError: ReceiverError { .message("Each file must be at most 50 MiB.") }
+    static var unreadableError: ReceiverError { .message("Could not read the file supplied by the source app.") }
     static func originalTypeIdentifier(in registeredTypes: [String]) -> String? {
         let concreteTypes = registeredTypes.filter {
             $0 != UTType.image.identifier && $0 != "com.apple.uikit.image" &&
-            UTType($0)?.conforms(to: .image) == true
+            $0 != UTType.movie.identifier && $0 != UTType.video.identifier &&
+            (UTType($0)?.conforms(to: .image) == true || UTType($0)?.conforms(to: .movie) == true)
         }
         // A source may offer several file representations. Keep its ordering
         // among Codex-compatible types rather than requesting an unsupported
         // original when a supported file is already available. No transcoding.
-        let supported: Set<UTType> = [.png, .jpeg, .gif, .webP]
+        let supported: Set<UTType> = [.png, .jpeg, .gif, .webP, .mpeg4Movie, .quickTimeMovie]
         return concreteTypes.first { identifier in
             UTType(identifier).map { supported.contains($0) } == true
         } ?? concreteTypes.first

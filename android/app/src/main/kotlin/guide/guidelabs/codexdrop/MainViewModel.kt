@@ -11,7 +11,7 @@ data class SetupState(val busy: Boolean = false, val paired: Boolean = false, va
 class MainViewModel(private val repository: DropRepository) : ViewModel() {
     private val mutableState = MutableStateFlow(SetupState())
     val state = mutableState.asStateFlow()
-    init { action { val paired = repository.pairing() != null; mutableState.value = SetupState(paired = paired, message = if (paired) "Paired with your Mac. Share screenshots to Codex Drop from any app." else SetupState().message) } }
+    init { action { val paired = repository.pairing() != null; mutableState.value = SetupState(paired = paired, message = if (paired) "Paired with your Mac. Share photos or videos to Codex Drop from any app." else SetupState().message) } }
     fun message(text: String) { mutableState.value = mutableState.value.copy(message = text) }
     private fun action(block: suspend () -> Unit) {
         if (mutableState.value.busy) return
@@ -25,7 +25,7 @@ class MainViewModel(private val repository: DropRepository) : ViewModel() {
     }
     fun pair(code: String) = action {
         repository.pair(code)
-        mutableState.value = SetupState(paired = true, message = "Connected to your Mac. Share screenshots to Codex Drop from any app.")
+        mutableState.value = SetupState(paired = true, message = "Connected to your Mac. Share photos or videos to Codex Drop from any app.")
     }
     fun check() = action {
         val pairing = repository.pairing() ?: throw DropFailure("Pair with your Mac first.")
@@ -37,7 +37,7 @@ class MainViewModel(private val repository: DropRepository) : ViewModel() {
         val pairing = repository.pairing()?.takeIf { it.service == saved.service } ?: throw DropFailure("Pair with the original Mac to check this receipt.")
         repository.connect(pairing).use {
             val result = it.client.lookup(saved.id)
-            message(if (result.allVerified(saved.count)) "${saved.count} of ${saved.count} images verified attached." else result.reviewMessage())
+            message(if (result.allVerified(saved.count)) "${saved.count} of ${saved.count} files verified attached." else result.reviewMessage())
         }
     }
 }
