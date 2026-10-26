@@ -4,6 +4,35 @@ import CryptoKit
 import UniformTypeIdentifiers
 import zlib
 
+// Event gates prove overlap; the deadline only catches deadlocks in a broken
+// implementation and does not assert any machine-dependent speedup.
+@MainActor final class StartupGate {
+    private let stream: AsyncStream<Void>
+    private let continuation: AsyncStream<Void>.Continuation
+    private var opened = false
+    init() { (stream, continuation) = AsyncStream.makeStream() }
+    func open() { opened = true; continuation.finish() }
+    func wait() async throws {
+        try Task.checkCancellation()
+        if opened { return }
+        var iterator = stream.makeAsyncIterator()
+        _ = await iterator.next()
+        try Task.checkCancellation()
+    }
+}
+
+@MainActor func startupDeadline(_ body: @escaping @MainActor @Sendable () async throws -> Void) async throws {
+    try await withThrowingTaskGroup(of: Void.self) { group in
+        group.addTask { try await body() }
+        group.addTask {
+            try await Task.sleep(for: .seconds(3))
+            throw ReceiverError.message("Startup overlap check stalled: connection and preparation must run concurrently.")
+        }
+        defer { group.cancelAll() }
+        try await group.next()
+    }
+}
+
 @MainActor final class BatchStub {
     var calls: [String] = []
     var expectedHashes: [Int: String] = [:]
@@ -18,6 +47,8 @@ import zlib
     var terminal = "verified"
     var timeout = false
     var count = 2
+    var beforeCreate: (() async throws -> Void)?
+    var beforePrepare: ((Int) async throws -> Void)?
     let id = "11111111-1111-1111-1111-111111111111"
     func send(_ request: URLRequest) async throws -> (Data, Int) {
         let path = request.url!.path
@@ -26,6 +57,7 @@ import zlib
         if path.hasSuffix("commit") { precondition(request.httpBody == Data("{}".utf8)) }
         if path.contains("/jobs/") { pendingPolls = max(0, pendingPolls - 1) }
         if path == "/v1/batches" {
+            try await beforeCreate?()
             precondition(request.value(forHTTPHeaderField: "Content-Type") == "application/json")
             precondition(request.value(forHTTPHeaderField: "X-Request-ID") == id)
             let body = try JSONSerialization.jsonObject(with: request.httpBody!) as! [String: Int]
@@ -85,15 +117,119 @@ import zlib
         }
         let pairing = Pairing(v: 1, service: "unused", pin: String(repeating: "a", count: 64), token: String(repeating: "b", count: 32))
         var checks = 0
-        func run(_ stub: BatchStub, size: Int = 3, timeout: Duration = .seconds(120)) async throws -> DeliveryJob {
+        @MainActor func run(_ stub: BatchStub, size: Int = 3, timeout: Duration = .seconds(120)) async throws -> DeliveryJob {
             let client = ReceiverClient(pairing: pairing, baseURL: URL(string: "https://test.invalid")!, transport: stub.send, pollTimeout: timeout)
             defer { client.close() }
             return try await client.attachBatch(count: stub.count, id: stub.id, prepare: { index in
                 stub.prepared.append(index)
+                try await stub.beforePrepare?(index)
                 if stub.prepareFailure == index { throw ReceiverError.message("Fixture preparation rejected") }
                 return Data(repeating: 1, count: size)
             })
         }
+        for count in [1, 2] { try await startupDeadline {
+            let connected = StartupGate(), preparing = StartupGate()
+            let stub = BatchStub(); stub.count = count
+            stub.beforeCreate = { connected.open(); try await preparing.wait() }
+            stub.beforePrepare = { index in
+                if index == 0 { try await connected.wait(); preparing.open() }
+            }
+            let result = try await run(stub)
+            precondition(result.allVerified(count: count))
+            precondition(stub.prepared == Array(0..<count), "Prepare each image exactly once")
+        }; checks += 1 }
+        try await startupDeadline {
+            let preparing = StartupGate(), never = StartupGate()
+            let stub = BatchStub()
+            var preparationCancelled = false
+            stub.beforeCreate = { try await preparing.wait(); throw ReceiverError.message("Fixture connection failure") }
+            stub.beforePrepare = { _ in
+                preparing.open()
+                do { try await never.wait() } catch { preparationCancelled = error is CancellationError; throw error }
+            }
+            do { _ = try await run(stub); fatalError("Failed connection accepted") }
+            catch { precondition(error.localizedDescription == "Fixture connection failure") }
+            precondition(preparationCancelled && stub.calls == ["/v1/batches"])
+        }
+        checks += 1
+        try await startupDeadline {
+            let connected = StartupGate(), never = StartupGate()
+            let stub = BatchStub()
+            var connectionCancelled = false
+            stub.beforeCreate = {
+                connected.open()
+                do { try await never.wait() } catch { connectionCancelled = error is CancellationError; throw error }
+            }
+            stub.beforePrepare = { _ in try await connected.wait(); throw ReceiverError.message("Fixture preparation failure") }
+            do { _ = try await run(stub); fatalError("Failed preparation accepted") }
+            catch { precondition(error.localizedDescription == "Fixture preparation failure") }
+            precondition(connectionCancelled && stub.calls == ["/v1/batches"])
+        }
+        checks += 1
+        try await startupDeadline {
+            let connected = StartupGate(), preparing = StartupGate(), neverConnection = StartupGate(), neverImage = StartupGate()
+            let stub = BatchStub()
+            var connectionCancelled = false, preparationCancelled = false
+            stub.beforeCreate = {
+                connected.open()
+                do { try await neverConnection.wait() } catch { connectionCancelled = error is CancellationError; throw error }
+            }
+            stub.beforePrepare = { _ in
+                preparing.open()
+                do { try await neverImage.wait() } catch { preparationCancelled = error is CancellationError; throw error }
+            }
+            let transfer = Task { try await run(stub) }
+            try await connected.wait(); try await preparing.wait()
+            transfer.cancel()
+            do { _ = try await transfer.value; fatalError("Cancelled startup accepted") } catch { precondition(error is CancellationError) }
+            precondition(connectionCancelled && preparationCancelled && stub.calls == ["/v1/batches"])
+        }
+        checks += 1
+        try await startupDeadline {
+            let prepared = StartupGate(), stub = BatchStub()
+            var firstURL: URL?
+            stub.beforeCreate = { try await prepared.wait(); throw ReceiverError.message("Fixture connection failure") }
+            let client = ReceiverClient(pairing: pairing, baseURL: URL(string: "https://test.invalid")!, transport: stub.send)
+            defer { client.close() }
+            do {
+                _ = try await client.attachBatch(count: 2, id: stub.id, prepareFile: { _ in
+                    let file = try ImageFile.stage(Data([1, 2, 3])); firstURL = file.url; prepared.open(); return file
+                })
+                fatalError("Failed connection accepted")
+            } catch { precondition(error.localizedDescription == "Fixture connection failure") }
+            precondition(firstURL != nil && !FileManager.default.fileExists(atPath: firstURL!.path), "Failed startup must delete its prepared file")
+        }
+        checks += 1
+        try await startupDeadline {
+            let connected = StartupGate(), prepared = StartupGate(), never = StartupGate()
+            let stub = BatchStub()
+            var firstURL: URL?
+            stub.beforeCreate = { try await prepared.wait(); connected.open(); try await never.wait() }
+            let client = ReceiverClient(pairing: pairing, baseURL: URL(string: "https://test.invalid")!, transport: stub.send)
+            defer { client.close() }
+            let transfer = Task {
+                try await client.attachBatch(count: 2, id: stub.id, prepareFile: { _ in
+                    let file = try ImageFile.stage(Data([1, 2, 3])); firstURL = file.url; prepared.open(); return file
+                })
+            }
+            try await connected.wait(); transfer.cancel()
+            do { _ = try await transfer.value; fatalError("Cancelled startup accepted") } catch { precondition(error is CancellationError) }
+            precondition(firstURL != nil && !FileManager.default.fileExists(atPath: firstURL!.path), "Cancelled startup must delete its prepared file")
+            precondition(stub.calls == ["/v1/batches"])
+        }
+        checks += 1
+        let lifetimeStub = BatchStub()
+        let lifetimeClient = ReceiverClient(pairing: pairing, baseURL: URL(string: "https://test.invalid")!, transport: lifetimeStub.send)
+        var firstURL: URL?
+        let lifetimeResult = try await lifetimeClient.attachBatch(count: 2, id: lifetimeStub.id, prepareFile: { index in
+            if index == 1 { precondition(!FileManager.default.fileExists(atPath: firstURL!.path), "Release the first image before preparing the next") }
+            lifetimeStub.prepared.append(index)
+            let file = try ImageFile.stage(Data([1, 2, 3]))
+            if index == 0 { firstURL = file.url }
+            return file
+        })
+        lifetimeClient.close()
+        precondition(lifetimeResult.allVerified(count: 2)); checks += 1
         for count in [2, 10] {
             let stub = BatchStub(); stub.count = count
             let job = try await run(stub)

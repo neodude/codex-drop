@@ -61,6 +61,11 @@ enum BatchProgress {
     case preparing(Int, Int), uploading(Int, Int), committing, confirming
 }
 
+private enum BatchStartup: Sendable {
+    case connected(URL)
+    case prepared(ImageFile, milliseconds: Int)
+}
+
 // URLSession calls this delegate on its own queue. Its only stored state is
 // immutable Sendable data; no UI or actor state crosses that boundary.
 final class PinnedSessionDelegate: NSObject, URLSessionDelegate, URLSessionTaskDelegate {
@@ -190,27 +195,23 @@ final class PinnedSessionDelegate: NSObject, URLSessionDelegate, URLSessionTaskD
         let (_, code) = try await request(base, path: "v1/jobs/00000000-0000-0000-0000-000000000000")
         guard code == 404 else { throw ReceiverError.message("The Mac receiver did not answer as expected.") }
     }
-    func attachBatch(count: Int, id: String, prepare: (Int) async throws -> Data,
-                     progress: (BatchProgress) -> Void = { _ in },
-                     timing: (String, Int) -> Void = { _, _ in }) async throws -> DeliveryJob {
+    func attachBatch(count: Int, id: String, prepare: @escaping @MainActor (Int) async throws -> Data,
+                     progress: @escaping @MainActor (BatchProgress) -> Void = { _ in },
+                     timing: @escaping @MainActor (String, Int) -> Void = { _, _ in }) async throws -> DeliveryJob {
         try await attachBatch(count: count, id: id, prepareFile: { index in
             // The Data value is released when this closure returns, before upload begins.
             try ImageFile.stage(await prepare(index))
         }, progress: progress, timing: timing)
     }
-    func attachBatch(count: Int, id: String, prepareFile: (Int) async throws -> ImageFile,
-                     progress: (BatchProgress) -> Void = { _ in },
-                     timing: (String, Int) -> Void = { _, _ in }) async throws -> DeliveryJob {
+    func attachBatch(count: Int, id: String, prepareFile: @escaping @MainActor (Int) async throws -> ImageFile,
+                     progress: @escaping @MainActor (BatchProgress) -> Void = { _ in },
+                     timing: @escaping @MainActor (String, Int) -> Void = { _, _ in }) async throws -> DeliveryJob {
         guard (1...10).contains(count), UUID(uuidString: id)?.uuidString.lowercased() == id else {
             throw ReceiverError.message("Share 1–10 images in one new request.")
         }
         try Task.checkCancellation()
-        let lookupStarted = ProcessInfo.processInfo.systemUptime
-        let base: URL
-        if let baseURL { base = baseURL } else { base = try await ServiceResolver().resolve(pairing.service) }
-        timing("Finding Mac", Int((ProcessInfo.processInfo.systemUptime - lookupStarted) * 1000))
         struct Receipt: Decodable { let received: Bool; let job: DeliveryJob }
-        func receipt(_ response: (Data, Int)) throws -> DeliveryJob {
+        @MainActor func receipt(_ response: (Data, Int)) throws -> DeliveryJob {
             guard response.1 == 200 || response.1 == 202 else {
                 let code = (try? JSONSerialization.jsonObject(with: response.0)) as? [String: Any]
                 switch code?["error"] as? String {
@@ -228,16 +229,53 @@ final class PinnedSessionDelegate: NSObject, URLSessionDelegate, URLSessionTaskD
             guard value.received, value.job.id == id else { throw ReceiverError.message("The Mac returned an invalid receipt.") }
             return value.job
         }
-        _ = try receipt(await request(base, path: "v1/batches", body: JSONEncoder().encode(["count": count]), id: id))
         var totalBytes = 0, preparingMS = 0, uploadMS = 0
+        var firstImage: ImageFile?
+        @MainActor func connect() async throws -> BatchStartup {
+            let started = ProcessInfo.processInfo.systemUptime
+            let base: URL
+            if let baseURL { base = baseURL } else { base = try await ServiceResolver().resolve(pairing.service) }
+            timing("Finding Mac", Int((ProcessInfo.processInfo.systemUptime - started) * 1000))
+            _ = try receipt(await request(base, path: "v1/batches", body: JSONEncoder().encode(["count": count]), id: id))
+            return .connected(base)
+        }
+        @MainActor func prepareFirst() async throws -> BatchStartup {
+            try Task.checkCancellation()
+            progress(.preparing(0, count))
+            let started = ProcessInfo.processInfo.systemUptime
+            let image = try await prepareFile(0)
+            try Task.checkCancellation()
+            return .prepared(image, milliseconds: Int((ProcessInfo.processInfo.systemUptime - started) * 1000))
+        }
+        // Keep both operations in one scope: either failure cancels and joins
+        // its sibling, including a provider read or a pending Bonjour/TLS call.
+        let base = try await withThrowingTaskGroup(of: BatchStartup.self) { group in
+            group.addTask { try await connect() }
+            group.addTask { try await prepareFirst() }
+            var connected: URL?
+            for try await result in group {
+                switch result {
+                case let .connected(url): connected = url
+                case let .prepared(image, milliseconds): firstImage = image; preparingMS = milliseconds
+                }
+            }
+            guard let connected else { throw ReceiverError.message("Could not connect to your Mac.") }
+            return connected
+        }
         for index in 0..<count {
             try Task.checkCancellation()
-            progress(.preparing(index, count))
-            let preparedAt = ProcessInfo.processInfo.systemUptime
             // Scope each original file to one upload. Never accumulate the batch's image data.
             do {
-                let image = try await prepareFile(index)
-                preparingMS += Int((ProcessInfo.processInfo.systemUptime - preparedAt) * 1000)
+                let image: ImageFile
+                if index == 0 {
+                    guard let prepared = firstImage else { throw ImageInput.unreadableError }
+                    image = prepared; firstImage = nil
+                } else {
+                    progress(.preparing(index, count))
+                    let started = ProcessInfo.processInfo.systemUptime
+                    image = try await prepareFile(index)
+                    preparingMS += Int((ProcessInfo.processInfo.systemUptime - started) * 1000)
+                }
                 try Task.checkCancellation()
                 guard image.byteCount > 0 else { throw ImageInput.unreadableError }
                 guard image.byteCount <= ImageInput.maximumBytes else { throw ImageInput.byteLimitError }

@@ -38,19 +38,34 @@ class ShareViewModel(private val gateway: DropGateway, restoredId: String? = nul
             if (!gateway.slot.acquire()) { mutableState.value = ShareUiState("Another share is in progress", "Let it finish before sharing again. This share has not been queued.", working = false); return@launch }
             try {
                 val pairing = gateway.pairing() ?: throw DropFailure("Open Codex Drop and scan the Mac’s pairing QR code first.")
-                gateway.connect(pairing).use { connection ->
-                    val result = connection.client.attach(sources.size, requestId,
-                        prepare = { gateway.prepare(sources[it]) },
-                        beforeCommit = { gateway.remember(PendingReceipt(requestId, sources.size, pairing.service, System.currentTimeMillis())) },
-                        progress = { progress ->
-                            mutableState.value = when (progress) {
-                                is TransferProgress.Preparing -> ShareUiState("Preparing image ${progress.index + 1} of ${progress.count}", "Getting your screenshots ready…", 1)
-                                is TransferProgress.Uploading -> ShareUiState("Sending image ${progress.index + 1} of ${progress.count}", "Transferring securely to your Mac…", 1)
-                                TransferProgress.Committing -> ShareUiState("Attaching in Codex", "Your Mac is adding the images to the active draft…", 2, committed = true)
-                                TransferProgress.Confirming -> ShareUiState("Checking attachments", "Waiting for the Mac to verify your draft…", 2, committed = true)
-                            }
-                        })
-                    showResult(result, sources.size)
+                var firstImage: ByteArray? = null
+                try {
+                    coroutineScope {
+                        // Overlap only startup. Later images keep the existing prepare/upload order.
+                        val preparation = launch { firstImage = gateway.prepare(sources.first()) }
+                        gateway.connect(pairing).use { connection ->
+                            preparation.join()
+                            ensureActive()
+                            val result = connection.client.attach(sources.size, requestId,
+                                prepare = { index ->
+                                    if (index == 0) checkNotNull(firstImage).also { firstImage = null }
+                                    else gateway.prepare(sources[index])
+                                },
+                                beforeCommit = { gateway.remember(PendingReceipt(requestId, sources.size, pairing.service, System.currentTimeMillis())) },
+                                progress = { progress ->
+                                    mutableState.value = when (progress) {
+                                        is TransferProgress.Preparing -> ShareUiState("Preparing image ${progress.index + 1} of ${progress.count}", "Getting your screenshots ready…", 1)
+                                        is TransferProgress.Uploading -> ShareUiState("Sending image ${progress.index + 1} of ${progress.count}", "Transferring securely to your Mac…", 1)
+                                        TransferProgress.Committing -> ShareUiState("Attaching in Codex", "Your Mac is adding the images to the active draft…", 2, committed = true)
+                                        TransferProgress.Confirming -> ShareUiState("Checking attachments", "Waiting for the Mac to verify your draft…", 2, committed = true)
+                                    }
+                                })
+                            showResult(result, sources.size)
+                        }
+                    }
+                } finally {
+                    // The scope has joined/cancelled preparation, including on connection failure.
+                    firstImage = null
                 }
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) {
