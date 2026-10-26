@@ -193,9 +193,10 @@ final class ClipboardLease {
                 else { missing.append(type) }
             }
             for type in missing {
-                guard let data = Self.recoverImageRepresentation(type, from: copy) else {
+                guard let data = Self.recoverTextRepresentation(type, from: copy) ?? Self.recoverImageRepresentation(type, from: copy) else {
                     throw DeliveryRefusal(reason: "clipboard_snapshot_incomplete", diagnostics: [
                         "unreadableFormat": type.rawValue,
+                        "readableFormats": copy.keys.map(\.rawValue).sorted().joined(separator: ","),
                         "recovery": "Copy some plain text, then explicitly retry. The unreadable clipboard was left unchanged."
                     ])
                 }
@@ -204,6 +205,21 @@ final class ClipboardLease {
             return copy
         }
         guard pasteboard.changeCount == initialCount else { throw DeliveryRefusal(reason: "clipboard_changed_during_snapshot") }
+    }
+    fileprivate static func recoverTextRepresentation(_ type: NSPasteboard.PasteboardType,
+                                                  from values: [NSPasteboard.PasteboardType: Data]) -> Data? {
+        let external = NSPasteboard.PasteboardType("public.utf16-external-plain-text")
+        if type == external, let bytes = values[.string], let text = String(data: bytes, encoding: .utf8),
+           text.data(using: .utf8) == bytes {
+            return text.data(using: .utf16)
+        }
+        if type == .string, let bytes = values[external], bytes.count >= 2, bytes.count.isMultiple(of: 2),
+           bytes.starts(with: [0xff, 0xfe]) || bytes.starts(with: [0xfe, 0xff]),
+           let text = String(data: bytes, encoding: .utf16),
+           text.data(using: bytes.starts(with: [0xff, 0xfe]) ? .utf16LittleEndian : .utf16BigEndian) == Data(bytes.dropFirst(2)) {
+            return text.data(using: .utf8)
+        }
+        return nil
     }
     private static func recoverImageRepresentation(_ type: NSPasteboard.PasteboardType,
                                                    from values: [NSPasteboard.PasteboardType: Data]) -> Data? {
@@ -851,6 +867,63 @@ func platformSelfTest() throws {
     try check(try childLockResult() == "acquired", "delivery_lock_released_after_completion")
     final class UnreadableProvider: NSObject, NSPasteboardItemDataProvider {
         func pasteboard(_ pasteboard: NSPasteboard?, item: NSPasteboardItem, provideDataForType type: NSPasteboard.PasteboardType) {}
+    }
+    let textProvider = UnreadableProvider()
+    let utf16External = NSPasteboard.PasteboardType("public.utf16-external-plain-text")
+    let text = "clipboard\r\n🧗 e\u{301} العربية\u{0}tail"
+    let utf8Bytes = Data(text.utf8)
+    let opaqueType = NSPasteboard.PasteboardType("com.example.text-metadata")
+    let opaqueBytes = Data([0, 255, 42])
+    let promisedText = NSPasteboardItem()
+    promisedText.setDataProvider(textProvider, forTypes: [utf16External])
+    promisedText.setData(utf8Bytes, forType: .string)
+    promisedText.setData(opaqueBytes, forType: opaqueType)
+    pb.clearContents(); try check(pb.writeObjects([promisedText]), "promised_utf16_fixture")
+    let textCount = pb.changeCount
+    let textLease = try ClipboardLease(pb)
+    try check(pb.changeCount == textCount, "text_recovery_does_not_modify_clipboard")
+    try textLease.stage(originalImage)
+    try check(textLease.restore() == "restored", "promised_utf16_restored")
+    let restoredText = pb.pasteboardItems![0]
+    try check(restoredText.data(forType: .string) == utf8Bytes, "readable_utf8_bytes_preserved")
+    try check(restoredText.data(forType: opaqueType) == opaqueBytes, "text_metadata_bytes_preserved")
+    try check(restoredText.data(forType: utf16External).flatMap { String(data: $0, encoding: .utf16) } == text,
+              "utf16_recovery_preserves_unicode_and_control_characters")
+    let reverseText = NSPasteboardItem()
+    reverseText.setDataProvider(textProvider, forTypes: [.string])
+    let utf16Bytes = Data([0xfe, 0xff]) + text.data(using: .utf16BigEndian)!
+    reverseText.setData(utf16Bytes, forType: utf16External)
+    pb.clearContents(); try check(pb.writeObjects([reverseText]), "promised_utf8_fixture")
+    let reverseLease = try ClipboardLease(pb)
+    try reverseLease.stage(originalImage)
+    try check(reverseLease.restore() == "restored", "promised_utf8_restored")
+    try check(pb.pasteboardItems![0].data(forType: .string) == utf8Bytes &&
+              pb.pasteboardItems![0].data(forType: utf16External) == utf16Bytes, "reverse_text_recovery_preserves_bytes")
+    let invalidTexts: [(NSPasteboard.PasteboardType, NSPasteboard.PasteboardType, Data)] = [
+        (.string, utf16External, Data([0xc3, 0x28])),
+        (utf16External, .string, Data([0xff, 0xfe, 0x00, 0xd8])),
+        (utf16External, .string, Data([0x41, 0x00])),
+        (utf16External, .string, Data([0xff, 0xfe, 0x00]))
+    ]
+    for (source, target, bytes) in invalidTexts {
+        try check(ClipboardLease.recoverTextRepresentation(target, from: [source: bytes]) == nil,
+                  "invalid_encoding_is_never_recovered")
+        let corruptText = NSPasteboardItem()
+        corruptText.setData(bytes, forType: source)
+        corruptText.setDataProvider(textProvider, forTypes: [target])
+        pb.clearContents(); try check(pb.writeObjects([corruptText]), "corrupt_text_fixture")
+        let count = pb.changeCount
+        // AppKit can fulfill a text alternate itself before our snapshot reads
+        // it. Readable formats are preserved verbatim, even if another format
+        // contains invalid bytes; recovery only handles unavailable formats.
+        if pb.pasteboardItems![0].data(forType: target) == nil {
+            do { _ = try ClipboardLease(pb); throw DeliveryRefusal(reason: "platform_test_corrupt_text_accepted") }
+            catch let error as DeliveryRefusal { try check(error.reason == "clipboard_snapshot_incomplete", "corrupt_text_refused") }
+        } else {
+            let readable = try ClipboardLease(pb)
+            try check(readable.saved[0][source] == bytes, "readable_invalid_source_preserved_verbatim")
+        }
+        try check(pb.changeCount == count, "corrupt_text_clipboard_unchanged")
     }
     // Reproduce an iPhone clipboard: readable HEIC, promised but unavailable
     // PNG/JPEG, and CoreDevice metadata. Snapshotting must preserve usable data

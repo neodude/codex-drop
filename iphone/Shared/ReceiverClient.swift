@@ -32,14 +32,22 @@ struct DeliveryJob: Decodable, Sendable {
         let unlockNeeded = result?.reason == "mac_screen_locked" || result?.items?.contains { $0.reason == "mac_screen_locked" } == true
         let unlockHelp = "Unlock your Mac to attach screenshots."
         let permissionHelp = "Allow Codex Drop in Mac System Settings → Privacy & Security → Accessibility, then share again."
+        let reasons = ([result?.reason] + (result?.items?.map(\.reason) ?? [])).compactMap { $0 }
+        let causeHelp: String? = reasons.contains("clipboard_snapshot_incomplete")
+            ? "The Mac couldn’t safely preserve its current clipboard."
+            : reasons.contains(where: { $0.hasPrefix("file_dialog_") })
+                ? "The Mac couldn’t complete its file-attachment dialog. Check its open windows."
+                : nil
         guard let result, let count = result.totalCount, let verified = result.verifiedCount,
               (1...10).contains(count), (0...count).contains(verified), let items = result.items,
               items.count == count, items.map(\.index).sorted() == Array(0..<count),
               items.filter({ $0.status == "verified" }).count == verified else {
-            return (unlockNeeded ? unlockHelp + "\n" : "") + (permissionNeeded ? permissionHelp + "\n" : "") + "Delivery needs review on the Mac. Images may already be attached. Check before sharing again. No automatic retry."
+            return (unlockNeeded ? unlockHelp + "\n" : "") + (permissionNeeded ? permissionHelp + "\n" : "") +
+                (causeHelp.map { $0 + "\n" } ?? "") + "Delivery needs review on the Mac. Images may already be attached. Check before sharing again. No automatic retry."
         }
         if allVerified(count: count) { return "Attached \(count) \(count == 1 ? "image" : "images"). Message not sent." }
         var lines = unlockNeeded ? [unlockHelp] : []
+        if let causeHelp { lines.append(causeHelp) }
         lines.append("\(verified) of \(count) images verified attached.")
         for item in items.sorted(by: { $0.index < $1.index }) where item.status != "verified" {
             switch item.status {
@@ -218,9 +226,9 @@ final class PinnedSessionDelegate: NSObject, URLSessionDelegate, URLSessionTaskD
                 case "image_size_limit": throw ImageInput.byteLimitError
                 case "unsupported_image_format":
                     if let message = code?["message"] as? String, !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        throw ReceiverError.message(message)
+                        throw ReceiverError.unsupportedImageFormat(message)
                     }
-                    throw ReceiverError.message("This image format is not supported. Share JPEG, PNG, GIF, or WebP. In Photos, choose Automatic or Most Compatible.")
+                    throw ReceiverError.unsupportedImageFormat("This image format is not supported. Share JPEG, PNG, GIF, or WebP. In Photos, choose Automatic or Most Compatible.")
                 case "invalid_image", "unsupported_image", "invalid_png": throw ReceiverError.message("The Mac could not read this original image or does not support its format.")
                 default: throw ReceiverError.message("The Mac refused the request (HTTP \(response.1)). No automatic retry.")
                 }

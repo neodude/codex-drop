@@ -32,7 +32,15 @@ struct Pairing: Codable, Equatable, Sendable {
 
 enum ReceiverError: LocalizedError {
     case message(String)
-    var errorDescription: String? { if case let .message(text) = self { text } else { nil } }
+    case unsupportedImageFormat(String)
+    var isUnsupportedImageFormat: Bool {
+        if case .unsupportedImageFormat = self { true } else { false }
+    }
+    var errorDescription: String? {
+        switch self {
+        case let .message(text), let .unsupportedImageFormat(text): text
+        }
+    }
 }
 
 enum PairingStore {

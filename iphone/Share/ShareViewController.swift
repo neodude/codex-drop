@@ -23,6 +23,7 @@ import ImageIO
     private func attach() async {
         let startedAt = ProcessInfo.processInfo.systemUptime
         var timings: [String: Int] = [:]
+        var formatDiagnostic: String?
         defer {
             timings["Total"] = Int((ProcessInfo.processInfo.systemUptime - startedAt) * 1000)
             PairingStore.saveTiming(timings)
@@ -39,7 +40,16 @@ import ImageIO
             let client = ReceiverClient(pairing: pairing); defer { client.close() }
             let job = try await client.attachBatch(count: items.count, id: requestID, prepareFile: { index in
                 let input = try await Self.readImage(items[index])
-                return try await ImageInput.originalFile(input)
+                formatDiagnostic = ImageInput.formatDiagnostic(of: input,
+                    requestedType: ImageInput.originalTypeIdentifier(in: items[index].registeredTypeIdentifiers),
+                    offeredTypes: items[index].registeredTypeIdentifiers)
+                let original = try await ImageInput.originalFile(input)
+                if original !== input {
+                    formatDiagnostic = ImageInput.formatDiagnostic(of: original,
+                        requestedType: ImageInput.originalTypeIdentifier(in: items[index].registeredTypeIdentifiers),
+                        offeredTypes: items[index].registeredTypeIdentifiers)
+                }
+                return original
             }, progress: { [self] progress in
                 switch progress {
                 case let .preparing(index, count):
@@ -63,7 +73,10 @@ import ImageIO
             if committed {
                 sheet.render(title: "Check your Mac", status: "Attachment isn’t confirmed", detail: "Some images may already be attached. Check Codex before sharing again. Don’t resend images already attached. No automatic retry.", stage: nil, working: false, buttonTitle: "Close")
             } else {
-                let detail = error is ReceiverError ? error.localizedDescription : "Connection or image preparation interrupted."
+                var detail = error is ReceiverError ? error.localizedDescription : "Connection or image preparation interrupted."
+                if (error as? ReceiverError)?.isUnsupportedImageFormat == true, let formatDiagnostic {
+                    detail += "\n\n" + formatDiagnostic
+                }
                 sheet.render(title: "Drop interrupted", status: "No images attached", detail: detail, stage: nil, working: false, buttonTitle: "Close")
             }
         }

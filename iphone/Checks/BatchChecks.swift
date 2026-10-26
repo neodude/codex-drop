@@ -4,6 +4,13 @@ import CryptoKit
 import UniformTypeIdentifiers
 import zlib
 
+// A format wrapper must never instantiate a class supplied by an archive.
+final class ArchiveDecodeTrap: NSObject, NSSecureCoding {
+    static var supportsSecureCoding: Bool { true }
+    required init?(coder: NSCoder) { fatalError("An untrusted archive class was instantiated") }
+    func encode(with coder: NSCoder) { fatalError("Test sentinel is never encoded") }
+}
+
 // Event gates prove overlap; the deadline only catches deadlocks in a broken
 // implementation and does not assert any machine-dependent speedup.
 @MainActor final class StartupGate {
@@ -264,6 +271,8 @@ import zlib
             do { _ = try await run(unsupported); fatalError("Unsupported image format accepted") }
             catch {
                 precondition(error is ReceiverError)
+                precondition((error as? ReceiverError)?.isUnsupportedImageFormat == true,
+                             "Keep format refusals distinct so only they include file-format diagnostics")
                 if !message.isEmpty { precondition(error.localizedDescription == message) }
                 else { precondition(error.localizedDescription.contains("JPEG, PNG, GIF, or WebP")); precondition(error.localizedDescription.contains("Automatic or Most Compatible")) }
                 precondition(unsupported.calls == ["/v1/batches", "/v1/batches/\(unsupported.id)/images/0"])
@@ -316,6 +325,14 @@ import zlib
         let missingLocked = try JSONDecoder().decode(DeliveryJob.self, from: Data(#"{"id":"x","state":"blocked","result":{"reason":"mac_screen_locked"}}"#.utf8))
         precondition(missingLocked.userMessage.hasPrefix("Unlock your Mac")); precondition(missingLocked.userMessage.contains("may already be attached")); precondition(!missingLocked.allVerified(count: 1))
         checks += 1
+        for (reason, explanation) in [("clipboard_snapshot_incomplete", "clipboard"), ("file_dialog_timeout", "file-attachment dialog")] {
+            let value: [String: Any] = ["id": "x", "state": "blocked", "result": ["reason": reason,
+                "verifiedCount": 0, "totalCount": 1, "items": [["index": 0, "status": "blocked", "pasteAttempted": false]]]]
+            let refused = try JSONDecoder().decode(DeliveryJob.self, from: JSONSerialization.data(withJSONObject: value))
+            precondition(refused.userMessage.contains(explanation), "Show the Mac refusal cause on the phone")
+            precondition(refused.userMessage.contains("0 of 1") && refused.userMessage.contains("No automatic retry"))
+            checks += 1
+        }
         let missing = try JSONDecoder().decode(DeliveryJob.self, from: Data("{\"id\":\"x\",\"state\":\"verified\"}".utf8))
         precondition(!missing.allVerified(count: 2)); precondition(missing.userMessage.contains("review"))
         checks += 1
@@ -349,7 +366,7 @@ import zlib
         precondition(!cancelledFile.calls.contains { $0.hasSuffix("commit") }); checks += 1
         print("PASS: \(checks) Swift batch sequencing, bounds, cancellation, partial-result, timeout and original-file byte-preservation checks; no network, Codex or clipboard access.")
     }
-    // Test-only ImageIO fixture generation. The production file path imports no ImageIO.
+    // Test-only pixel generation; production diagnostics only identify containers.
     static func fixture(type: UTType, width: Int = 64, height: Int = 32) -> Data {
         let bitmap = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
                                space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
@@ -398,8 +415,70 @@ import zlib
         try file.write(contentsOf: withUnsafeBytes(of: UInt32(crc).bigEndian) { Data($0) })
         try file.write(contentsOf: png.suffix(12))
     }
+    // UIKit 26.5 synthetic NSItemProvider(item: UIImage, typeIdentifier: public.jpeg) file output.
+    // Reproduces a JPEG-advertised binary plist containing PNG bytes, without a phone.
+    static let archivedUIImage = Data(base64Encoded: """
+        YnBsaXN0MDDUAQIDBAUGBwpYJHZlcnNpb25ZJGFyY2hpdmVyVCR0b3BYJG9iamVjdHMSAAGGoF8QD05TS2V5ZWRBcmNoaXZlctEI
+        CVRyb290gAGpCwwoKSouMjk9VSRudWxs3g0ODxAREhMUFRYXGBkaGxwcHh8gISIeIyQlIB9bVUlJbWFnZURhdGFfEBRVSUtpdFdh
+        bnRzUHJvcGVydGllc15VSUtpdERpZEVuY29kZV8QD1VJUmVuZGVyaW5nTW9kZV8QHFVJSW1hZ2VBY2Nlc3NpYmlsaXR5TGFuZ3Vh
+        Z2VcVUlIYXNQYXR0ZXJuXxAWVUlJbWFnZVRyYWl0Q29sbGVjdGlvblYkY2xhc3NfEBJVSUltYWdlT3JpZW50YXRpb25fEBRVSUlt
+        YWdlQ29uZmlndXJhdGlvbldVSVNjYWxlXxATVUlJbWFnZVNpemVJblBpeGVsc18QHVVJSW1hZ2VJc0ZsaXBwZWRJblJpZ2h0VG9M
+        ZWZ0XxAZVUlJbWFnZUFjY2Vzc2liaWxpdHlMYWJlbIACCQkQAIAACIAFgAiABCI/gAAAgAMIgABPEQFqiVBORw0KGgoAAAANSUhE
+        UgAAABgAAAAYCAIAAABvFaqvAAAAAXNSR0IArs4c6QAAAIRlWElmTU0AKgAAAAgABQESAAMAAAABAAEAAAEaAAUAAAABAAAASgEb
+        AAUAAAABAAAAUgEoAAMAAAABAAIAAIdpAAQAAAABAAAAWgAAAAAAAABIAAAAAQAAAEgAAAABAAOgAQADAAAAAQABAACgAgAEAAAA
+        AQAAABigAwAEAAAAAQAAABgAAAAAEQ8YrgAAAAlwSFlzAAALEwAACxMBAJqcGAAAABxpRE9UAAAAAgAAAAAAAAAMAAAAKAAAAAwA
+        AAAMAAAAW3FoSS0AAAAnSURBVDgRYvjHwEAVRB1TgE4ZNYhwCBBWQWScjhpEOAQIqyAysAEAAAD//zQ4a5YAAAAkSURBVGP4x8BA
+        FUQdU4BOGTWIcAgQVkFknI4aRDgECKsgMrABTxI7n159H7UAAAAASUVORK5CYIJYezI0LCAyNH3SFCssIV8QEVVJVHJhaXRDb2xs
+        ZWN0aW9ugAeABdIvFDAxXxA2VUlUcmFpdENvbGxlY3Rpb25CdWlsdGluVHJhaXQtX1VJVHJhaXROYW1lRGlzcGxheVNjYWxlIz/w
+        AAAAAAAAgAbSMzQ1NlokY2xhc3NuYW1lWCRjbGFzc2VzXxARVUlUcmFpdENvbGxlY3Rpb26iNzhfEBFVSVRyYWl0Q29sbGVjdGlv
+        blhOU09iamVjdNIzNDo7XxAUVUlJbWFnZUNvbmZpZ3VyYXRpb26iPDhfEBRVSUltYWdlQ29uZmlndXJhdGlvbtIzND4/V1VJSW1h
+        Z2WiPjgACAARABoAJAApADIANwBJAEwAUQBTAF0AYwCAAIwAowCyAMQA4wDwAQkBEAElATwBRAFaAXoBlgGYAZkBmgGcAZ4BnwGh
+        AaMBpQGqAawBrQGvAx0DJgMrAz8DQQNDA0gDgQOKA4wDkQOcA6UDuQO8A9AD2QPeA/UD+AQPBBQEHAAAAAAAAAIBAAAAAAAAAEAA
+        AAAAAAAAAAAAAAAAAAQf
+        """, options: .ignoreUnknownCharacters)!
     @MainActor static func imageChecks(pairing: Pairing) async throws -> Int {
         var checks = 0
+        let wrapper = try ImageFile.stage(archivedUIImage)
+        let plist = try PropertyListSerialization.propertyList(from: archivedUIImage, format: nil) as! [String: Any]
+        let embedded = (plist["$objects"] as! [Any])[2] as! Data
+        let extracted = try await ImageInput.originalFile(wrapper)
+        precondition(extracted !== wrapper, "A JPEG-advertised UIImage archive must yield its embedded file, not the property list")
+        let extractedBytes = try Data(contentsOf: extracted.url)
+        precondition(extractedBytes == embedded, "Archive extraction must preserve every encoded image byte")
+        let archiveStub = BatchStub(); archiveStub.count = 1; archiveStub.expectedHashes[0] = try fileHash(extracted.url)
+        let archiveClient = ReceiverClient(pairing: pairing, baseURL: URL(string: "https://test.invalid")!, transport: archiveStub.send)
+        defer { archiveClient.close() }
+        let archiveJob = try await archiveClient.attachBatch(count: 1, id: archiveStub.id, prepareFile: { index in
+            archiveStub.prepared.append(index); return extracted
+        })
+        precondition(archiveJob.allVerified(count: 1), "Recovered archive payload must upload and commit normally")
+        checks += 3
+        var archiveVariants: [Data] = [Data("bplist00truncated".utf8),
+            try PropertyListSerialization.data(fromPropertyList: ["image": embedded], format: .binary, options: 0)]
+        for variant in ["rotated", "mirrored", "animated", "missing payload", "wrong payload type", "non-image payload", "unexpected class"] {
+            var changed = plist
+            var objects = plist["$objects"] as! [Any]
+            var imageObject = objects[1] as! [String: Any]
+            switch variant {
+            case "rotated": imageObject["UIImageOrientation"] = 3
+            case "mirrored": imageObject["UIImageOrientation"] = 4
+            case "animated": imageObject["UIImageImages"] = imageObject["UIImageData"]
+            case "missing payload": imageObject.removeValue(forKey: "UIImageData")
+            case "wrong payload type": objects[2] = "Not image bytes"
+            case "non-image payload": objects[2] = Data("opaque text must not become an image".utf8)
+            default:
+                objects[8] = ["$classname": NSStringFromClass(ArchiveDecodeTrap.self),
+                              "$classes": [NSStringFromClass(ArchiveDecodeTrap.self), "NSObject"]]
+            }
+            objects[1] = imageObject; changed["$objects"] = objects
+            archiveVariants.append(try PropertyListSerialization.data(fromPropertyList: changed, format: .binary, options: 0))
+        }
+        for bytes in archiveVariants {
+            let file = try ImageFile.stage(bytes)
+            do { _ = try await ImageInput.originalFile(file); fatalError("Unsafe or unsupported archive accepted") }
+            catch { precondition((error as? ReceiverError)?.isUnsupportedImageFormat == true) }
+            checks += 1
+        }
         let webp = Data(base64Encoded: "UklGRiIAAABXRUJQVlA4IBYAAAAwAQCdASoBAAEAAUAmJaQAA3AA/v89WAAAAA==")!
         let fixtures = [("PNG", fixture(type: .png)), ("JPEG", fixture(type: .jpeg)),
                         ("HEIC", fixture(type: .heic)), ("GIF", fixture(type: .gif)), ("WebP", webp),
@@ -421,10 +500,39 @@ import zlib
             _ = try await client.attachBatch(count: 1, id: stub.id, prepareFile: { index in stub.prepared.append(index); return original })
             checks += 1
         }
-        precondition(ImageInput.originalTypeIdentifier(in: [UTType.image.identifier, UTType.heic.identifier, UTType.jpeg.identifier]) == UTType.heic.identifier)
+        precondition(ImageInput.originalTypeIdentifier(in: [UTType.image.identifier, UTType.heic.identifier, UTType.jpeg.identifier]) == UTType.jpeg.identifier,
+                     "Choose a supplied Codex-compatible representation before an unsupported image type")
         precondition(ImageInput.originalTypeIdentifier(in: [UTType.jpeg.identifier, UTType.png.identifier]) == UTType.jpeg.identifier)
         precondition(ImageInput.originalTypeIdentifier(in: [UTType.image.identifier, "com.apple.uikit.image"]) == nil)
         checks += 3
+        for unsupported in [UTType.heic.identifier, UTType.tiff.identifier, "public.avif"] {
+            precondition(ImageInput.originalTypeIdentifier(in: [unsupported, UTType.png.identifier]) == UTType.png.identifier,
+                         "Unsupported first representation hid an available PNG: " + unsupported)
+            checks += 1
+        }
+        for supported in [UTType.png.identifier, UTType.jpeg.identifier, UTType.gif.identifier, UTType.webP.identifier] {
+            precondition(ImageInput.originalTypeIdentifier(in: [UTType.heic.identifier, supported]) == supported)
+            checks += 1
+        }
+        precondition(ImageInput.originalTypeIdentifier(in: [UTType.image.identifier, UTType.heic.identifier]) == UTType.heic.identifier,
+                     "Unsupported-only shares must still reach the receiver's format refusal without conversion")
+        checks += 1
+        let diagnosticImage = try ImageFile.stage(fixture(type: .tiff))
+        let diagnostic = ImageInput.formatDiagnostic(of: diagnosticImage, requestedType: UTType.png.identifier,
+                                                     offeredTypes: [UTType.png.identifier, UTType.tiff.identifier, "private filename / path"])
+        precondition(diagnostic.contains("Detected: public.tiff"), "Identify supplied bytes even when the provider advertises PNG")
+        precondition(diagnostic.contains("Requested: public.png") && diagnostic.contains("Offered: public.png, public.tiff"))
+        precondition(!diagnostic.contains("private filename") && !diagnostic.contains("Synthetic") && !diagnostic.contains(diagnosticImage.url.path))
+        checks += 3
+        for (header, expected) in [(Data("bplist00private content".utf8), "binary property list"),
+                                   (Data([0xff, 0x0a, 0, 0]), "JPEG XL"),
+                                   (Data("private unknown file content".utf8), "unrecognized")] {
+            let file = try ImageFile.stage(header)
+            let description = ImageInput.formatDiagnostic(of: file, requestedType: nil, offeredTypes: [])
+            precondition(description.contains("Detected: " + expected))
+            precondition(!description.contains("private"))
+            checks += 1
+        }
         do { _ = try ImageFile.stage(Data()); fatalError("Empty file accepted") } catch { checks += 1 }
         do { _ = try ImageFile.stage(Data(repeating: 1, count: ImageInput.maximumBytes + 1)); fatalError("Over50 MiB accepted") }
         catch { precondition(error.localizedDescription.contains("50 MiB")); checks += 1 }

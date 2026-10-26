@@ -8,5 +8,5 @@ if /usr/bin/pgrep -x ReceiverFixture >/dev/null; then
 fi
 zsh "$RECEIVER_ROOT/receiver/build.zsh"
 python3 "$RECEIVER_ROOT/receiver/build_fixture.py"
-/usr/bin/open "$RECEIVER_ROOT/ReceiverFixture.app"
-python3 "$RECEIVER_ROOT/receiver/fixture_matrix.py"
+/usr/bin/open "$RECEIVER_ROOT/ReceiverFixture.app" --args --exit-after 90
+python3 "$RECEIVER_ROOT/receiver/fixture_matrix.py" "$@"

@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import Darwin
 
 private var hideApplicationFocus = false
 
@@ -85,6 +86,7 @@ final class FixtureDelegate: NSObject, NSApplicationDelegate {
             window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
             window.makeFirstResponder(editor); editor.setSelectedRange(NSRange(location: editor.string.utf16.count, length: 0))
             timer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in self?.refreshAndReport() }
+            if let timer { RunLoop.main.add(timer, forMode: .common) }
             // Apply the first requested mode through the same reset path as later cases.
             configuration["runID"] = "initializing"
             writeReport()
@@ -94,6 +96,7 @@ final class FixtureDelegate: NSObject, NSApplicationDelegate {
     @objc func pasteImage(_ sender: Any?) {
         pasteCount += 1
         let mode = configuration["mode"] ?? "standard"
+        let runID = configuration["runID"]
         if mode == "activation-required" && !NSApp.isActive { writeReport(); return }
         if mode == "draft-change" { editor.string += "changed by fixture" }
         if mode == "batch-focus-change" || mode == "background-focus-change" { window.makeFirstResponder(searchField) }
@@ -106,7 +109,7 @@ final class FixtureDelegate: NSObject, NSApplicationDelegate {
         if mode == "no-ack" || mode == "clipboard-change" || mode == "window-change" || (mode == "batch-uncertain" && pasteCount == 2) { writeReport(); return }
         let delay: TimeInterval = mode == "delayed" ? 3.5 : 0
         let attach: () -> Void = { [weak self] in
-            guard let self, let value = self.board.string(forType: .fileURL),
+            guard let self, self.configuration["runID"] == runID, let value = self.board.string(forType: .fileURL),
                   let url = URL(string: value), url.isFileURL,
                   let data = try? Data(contentsOf: url), !data.isEmpty else { return }
             let preview = NSImageView(); preview.image = NSImage(named: NSImage.multipleDocumentsName)
@@ -213,9 +216,31 @@ final class FixtureDelegate: NSObject, NSApplicationDelegate {
 
 @main struct FixtureMain {
     static func main() {
+        var cutoff: DispatchSourceTimer?
+        let args = CommandLine.arguments
+        if let index = args.firstIndex(of: "--exit-after") {
+            guard args.indices.contains(index + 1), let seconds = Double(args[index + 1]),
+                  seconds.isFinite, (1...120).contains(seconds) else {
+                fputs("Fixture cutoff must be between 1 and 120 seconds.\n", stderr); exit(2)
+            }
+            let timer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
+            timer.schedule(deadline: .now() + seconds)
+            // This is a disposable test app. Exit from an independent queue so
+            // a blocked UI, modal loop or delayed agent response cannot hold it.
+            timer.setEventHandler { _exit(124) }
+            timer.resume(); cutoff = timer
+        }
+        defer { cutoff?.cancel() }
+        if args.contains("--watchdog-probe") {
+            guard cutoff != nil else { exit(2) }
+            // Deliberately block the main thread without creating an NSApp or
+            // window. The independent cutoff must still end this test process.
+            withExtendedLifetime(cutoff) { Thread.sleep(forTimeInterval: 30) }
+            exit(3)
+        }
         let application = FixtureApplication.shared
         let delegate = FixtureDelegate()
         application.delegate = delegate; application.setActivationPolicy(.regular)
-        withExtendedLifetime(delegate) { application.run() }
+        withExtendedLifetime((delegate, cutoff)) { application.run() }
     }
 }
