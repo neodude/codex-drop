@@ -3,6 +3,7 @@ import ApplicationServices
 import CryptoKit
 import Darwin
 import Foundation
+import ImageIO
 
 // Shared by every receiver/test queue for this user, independent of data-dir.
 final class NativeDeliveryLock {
@@ -186,8 +187,13 @@ final class ClipboardLease {
         initialCount = pasteboard.changeCount
         saved = try (pasteboard.pasteboardItems ?? []).map { item in
             var copy: [NSPasteboard.PasteboardType: Data] = [:]
+            var missing: [NSPasteboard.PasteboardType] = []
             for type in item.types {
-                guard let data = item.data(forType: type) else {
+                if let data = item.data(forType: type) { copy[type] = data }
+                else { missing.append(type) }
+            }
+            for type in missing {
+                guard let data = Self.recoverImageRepresentation(type, from: copy) else {
                     throw DeliveryRefusal(reason: "clipboard_snapshot_incomplete", diagnostics: [
                         "unreadableFormat": type.rawValue,
                         "recovery": "Copy some plain text, then explicitly retry. The unreadable clipboard was left unchanged."
@@ -198,6 +204,27 @@ final class ClipboardLease {
             return copy
         }
         guard pasteboard.changeCount == initialCount else { throw DeliveryRefusal(reason: "clipboard_changed_during_snapshot") }
+    }
+    private static func recoverImageRepresentation(_ type: NSPasteboard.PasteboardType,
+                                                   from values: [NSPasteboard.PasteboardType: Data]) -> Data? {
+        // iPhone clipboard items can supply their original HEIC while advertising
+        // PNG/JPEG promises that never materialize. Keep every readable format
+        // byte-for-byte and eagerly fulfill only these known image alternatives.
+        // Unknown/missing formats and images we cannot decode still block safely.
+        guard ["public.png", "public.jpeg"].contains(type.rawValue) else { return nil }
+        for sourceType in ["public.png", "public.tiff", "public.heic", "public.heif", "public.jpeg"] {
+            guard let bytes = values[.init(sourceType)],
+                  let source = CGImageSourceCreateWithData(bytes as CFData, nil),
+                  CGImageSourceGetCount(source) == 1 else { continue }
+            let data = NSMutableData()
+            guard let destination = CGImageDestinationCreateWithData(data, type.rawValue as CFString, 1, nil) else { continue }
+            // ImageIO retains source image properties, including orientation and
+            // color profile. Only the unavailable alternate representation changes.
+            let properties = type.rawValue == "public.jpeg" ? [kCGImageDestinationLossyCompressionQuality: 1] as CFDictionary : nil
+            CGImageDestinationAddImageFromSource(destination, source, 0, properties)
+            if CGImageDestinationFinalize(destination) { return data as Data }
+        }
+        return nil
     }
     func stage(_ image: OriginalImage) throws {
         let snapshot = try persistOriginalSnapshot(image)
@@ -711,7 +738,20 @@ func diagnoseClipboardFormats() throws {
                          "byteCount": data?.count ?? 0])
         }
     }
-    let result: [String: Any] = ["formats": rows, "clipboardChangedDuringRead": before != clipboard.changeCount]
+    var result: [String: Any] = ["formats": rows]
+    do {
+        let snapshot = try ClipboardLease(clipboard) // Read-only; never stages or restores.
+        result["snapshotReady"] = true
+        result["recoveredImageFormats"] = rows.filter { row in
+            guard row["dataReadable"] as? Bool == false,
+                  let index = row["item"] as? Int, let type = row["type"] as? String,
+                  snapshot.saved.indices.contains(index) else { return false }
+            return snapshot.saved[index][.init(type)] != nil
+        }.map { ["item": $0["item"]!, "type": $0["type"]!] }
+    } catch let refusal as DeliveryRefusal {
+        result["snapshotReady"] = false; result["reason"] = refusal.reason
+    }
+    result["clipboardChangedDuringRead"] = before != clipboard.changeCount
     print(String(decoding: try JSONSerialization.data(withJSONObject: result, options: [.prettyPrinted, .sortedKeys]), as: UTF8.self))
 }
 
@@ -812,6 +852,77 @@ func platformSelfTest() throws {
     final class UnreadableProvider: NSObject, NSPasteboardItemDataProvider {
         func pasteboard(_ pasteboard: NSPasteboard?, item: NSPasteboardItem, provideDataForType type: NSPasteboard.PasteboardType) {}
     }
+    // Reproduce an iPhone clipboard: readable HEIC, promised but unavailable
+    // PNG/JPEG, and CoreDevice metadata. Snapshotting must preserve usable data
+    // and restore working alternate image representations after a drop.
+    let heic = NSMutableData()
+    guard let source = CGImageSourceCreateWithData(png as CFData, nil),
+          let destination = CGImageDestinationCreateWithData(heic, "public.heic" as CFString, 1, nil) else {
+        throw DeliveryRefusal(reason: "platform_test_heic_fixture")
+    }
+    CGImageDestinationAddImageFromSource(destination, source, 0, [kCGImagePropertyOrientation: 6] as CFDictionary)
+    try check(CGImageDestinationFinalize(destination), "heic_fixture_encoded")
+    let heicType = NSPasteboard.PasteboardType("public.heic")
+    let jpegType = NSPasteboard.PasteboardType("public.jpeg")
+    let syncType = NSPasteboard.PasteboardType("com.apple.coredevice.dtpasteboardd.sync")
+    let syncData = Data("synthetic device metadata".utf8)
+    let imageProvider = UnreadableProvider()
+    func promisedImage() -> NSPasteboardItem {
+        let item = NSPasteboardItem()
+        // Register missing types first: recovery must not depend on type order.
+        item.setDataProvider(imageProvider, forTypes: [.png, jpegType])
+        item.setData(heic as Data, forType: heicType)
+        item.setData(syncData, forType: syncType)
+        return item
+    }
+    let secondItem = NSPasteboardItem(); secondItem.setString("second item", forType: .string)
+    pb.clearContents(); try check(pb.writeObjects([promisedImage(), secondItem]), "promised_image_fixture")
+    let promisedCount = pb.changeCount
+    let imageLease = try ClipboardLease(pb)
+    try check(pb.changeCount == promisedCount, "image_recovery_does_not_modify_clipboard")
+    try imageLease.stage(originalImage)
+    try check(imageLease.restore() == "restored", "promised_image_restored")
+    let restored = pb.pasteboardItems ?? []
+    try check(restored.count == 2 && restored[1].string(forType: .string) == "second item", "image_recovery_preserves_items")
+    try check(restored[0].data(forType: heicType) == heic as Data, "heic_original_bytes_preserved")
+    try check(restored[0].data(forType: syncType) == syncData, "device_metadata_preserved")
+    let sourceProperties = CGImageSourceCopyPropertiesAtIndex(CGImageSourceCreateWithData(heic, nil)!, 0, nil)! as NSDictionary
+    for type in [NSPasteboard.PasteboardType.png, jpegType] {
+        guard let bytes = restored[0].data(forType: type),
+              let decoded = CGImageSourceCreateWithData(bytes as CFData, nil),
+              let properties = CGImageSourceCopyPropertiesAtIndex(decoded, 0, nil) as NSDictionary? else {
+            throw DeliveryRefusal(reason: "platform_test_recovered_image_unreadable")
+        }
+        try check(CGImageSourceGetType(decoded) as String? == type.rawValue && CGImageSourceCreateImageAtIndex(decoded, 0, nil) != nil,
+                  "recovered_image_decodes_" + type.rawValue)
+        for key in [kCGImagePropertyPixelWidth, kCGImagePropertyPixelHeight, kCGImagePropertyOrientation] {
+            try check(properties[key] as? Int == sourceProperties[key] as? Int, "recovered_image_geometry_" + type.rawValue)
+        }
+    }
+    pb.clearContents(); try check(pb.writeObjects([promisedImage()]), "promised_newer_fixture")
+    let imageChanged = try ClipboardLease(pb); try imageChanged.stage(originalImage)
+    pb.clearContents(); pb.setString("newer clipboard", forType: .string)
+    try check(imageChanged.restore() == "newer_preserved" && pb.string(forType: .string) == "newer clipboard",
+              "image_recovery_preserves_newer_clipboard")
+    let customMissing = promisedImage()
+    customMissing.setDataProvider(imageProvider, forTypes: [.init("com.example.missing-private-data")])
+    pb.clearContents(); try check(pb.writeObjects([customMissing]), "missing_custom_fixture")
+    let customCount = pb.changeCount
+    do { _ = try ClipboardLease(pb); throw DeliveryRefusal(reason: "platform_test_missing_custom_accepted") }
+    catch let error as DeliveryRefusal {
+        try check(error.reason == "clipboard_snapshot_incomplete", "missing_custom_refused")
+    }
+    try check(pb.changeCount == customCount, "missing_custom_clipboard_unchanged")
+    let corruptImage = NSPasteboardItem()
+    corruptImage.setData(Data("not an image".utf8), forType: heicType)
+    corruptImage.setDataProvider(imageProvider, forTypes: [.png])
+    pb.clearContents(); try check(pb.writeObjects([corruptImage]), "corrupt_image_fixture")
+    let corruptCount = pb.changeCount
+    do { _ = try ClipboardLease(pb); throw DeliveryRefusal(reason: "platform_test_corrupt_image_accepted") }
+    catch let error as DeliveryRefusal {
+        try check(error.reason == "clipboard_snapshot_incomplete", "corrupt_image_refused")
+    }
+    try check(pb.changeCount == corruptCount, "corrupt_clipboard_unchanged")
     let unreadableProvider = UnreadableProvider(), unreadableItem = NSPasteboardItem()
     unreadableItem.setDataProvider(unreadableProvider, forTypes: [.png])
     pb.clearContents(); try check(pb.writeObjects([unreadableItem]), "unreadable_fixture")
