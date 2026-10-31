@@ -7,6 +7,8 @@ import ImageIO
     private var transfer: Task<Void, Never>?
     private var started = false
     private var committed = false
+    private var formatDiagnostic: String?
+    private var timings: [String: Int] = [:]
     private let requestID = UUID().uuidString.lowercased()
     override func loadView() { view = sheet }
     override func viewDidLoad() {
@@ -22,11 +24,9 @@ import ImageIO
     }
     private func attach() async {
         let startedAt = ProcessInfo.processInfo.systemUptime
-        var timings: [String: Int] = [:]
-        var formatDiagnostic: String?
         defer {
-            timings["Total"] = Int((ProcessInfo.processInfo.systemUptime - startedAt) * 1000)
-            PairingStore.saveTiming(timings)
+            self.timings["Total"] = Int((ProcessInfo.processInfo.systemUptime - startedAt) * 1000)
+            PairingStore.saveTiming(self.timings)
         }
         do {
             guard let context = extensionContext, let pairing = try PairingStore.load() else {
@@ -41,12 +41,12 @@ import ImageIO
             let client = ReceiverClient(pairing: pairing); defer { client.close() }
             let job = try await client.attachBatch(count: items.count, id: requestID, prepareFile: { index in
                 let input = try await Self.readFile(items[index])
-                formatDiagnostic = ImageInput.formatDiagnostic(of: input,
+                self.formatDiagnostic = ImageInput.formatDiagnostic(of: input,
                     requestedType: ImageInput.originalTypeIdentifier(in: items[index].registeredTypeIdentifiers),
                     offeredTypes: items[index].registeredTypeIdentifiers)
                 let original = try await ImageInput.originalFile(input)
                 if original !== input {
-                    formatDiagnostic = ImageInput.formatDiagnostic(of: original,
+                    self.formatDiagnostic = ImageInput.formatDiagnostic(of: original,
                         requestedType: ImageInput.originalTypeIdentifier(in: items[index].registeredTypeIdentifiers),
                         offeredTypes: items[index].registeredTypeIdentifiers)
                 }
@@ -63,7 +63,7 @@ import ImageIO
                 case .confirming:
                     sheet.render(status: "Confirming attachments…", detail: "You can close this sheet. Delivery will continue on your Mac.", stage: 2, buttonTitle: "Close")
                 }
-            }, timing: { timings[$0] = $1 })
+            }, timing: { [self] in timings[$0] = $1 })
             if job.allVerified(count: items.count) {
                 context.completeRequest(returningItems: [], completionHandler: nil)
             } else {

@@ -75,6 +75,8 @@ open "Codex Drop.app"
 
 The builder signs the launcher and native helpers, verifies the bundle, and preserves a prior bundle in ignored `.codex-artifacts/builds/`. It does not launch the app. The default output is `Codex Drop.app` at the checkout root. Use `--output` for another app location and the verifier's `--app` for that same location. Rebuild after moving the checkout or replacing its Python installation.
 
+Use `--optimized` to compile the native executables with Swift release optimization for local runtime testing. This development-signed build is not a notarized distribution package.
+
 In the status window, confirm **Receiver running · same Wi-Fi** and **Accessibility: allowed**. Choose **Accessibility Settings…** if needed and enable Codex Drop or its signed helper if macOS lists that name. Allow local-network/firewall access on your trusted network if prompted. Do not disable the firewall globally.
 
 **Close Window** keeps the receiver running. Reopen Codex Drop from Finder or Spotlight to show it again. **Quit Codex Drop…** confirms before stopping phone drops and waits for active delivery to settle. **Open at Login** is opt-in for new users; existing choices are preserved. Login launches keep the window hidden. There is no Dock icon or menu-bar status item.

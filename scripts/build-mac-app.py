@@ -50,6 +50,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--runtime-root',type=Path,default=ROOT,help='Existing project whose private receiver data this build uses')
     parser.add_argument('--output',type=Path,default=ROOT/'Codex Drop.app',help='Destination .app bundle (prior bundle is archived)')
+    parser.add_argument('--optimized', action='store_true', help='Compile native executables with Swift release optimization')
     add_config_arguments(parser)
     args = parser.parse_args()
     config = resolve_config(args)
@@ -76,6 +77,8 @@ def main():
         cache = staging / 'swift-cache'
         shared = ['/usr/bin/xcrun', 'swiftc', '-parse-as-library', '-module-cache-path', cache,
                   '-target', f'{platform.machine()}-apple-macosx{MACOS_MINIMUM}']
+        if args.optimized:
+            shared.append('-O')
         run([*shared, ROOT / 'macos/ReceiverController.swift', ROOT / 'macos/AppPresentation.swift', ROOT / 'macos/StatusWindowView.swift', ROOT / 'macos/CodexDropApp.swift', '-o', executables / 'CodexDrop'])
         run([*shared, ROOT / 'receiver/DeliveryCore.swift', ROOT / 'receiver/MacPlatform.swift', ROOT / 'receiver/ReceiverMain.swift', '-o', resources / 'MacAttachmentReceiver'])
         run([*shared, ROOT / 'receiver/PairingWindow.swift', '-o', resources / 'ReceiverPairing'])
