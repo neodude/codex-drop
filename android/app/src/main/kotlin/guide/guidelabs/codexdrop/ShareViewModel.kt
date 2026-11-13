@@ -80,7 +80,8 @@ class ShareViewModel(private val gateway: DropGateway, restoredId: String? = nul
     }
     private fun showResult(result: DeliveryJob, count: Int) {
         mutableState.value = if (result.allVerified(count)) ShareUiState("Attached", "$count files added to your draft.", 3, working = false, committed = true, finished = true)
-        else ShareUiState("Check your Mac", result.reviewMessage(), 2, working = false, committed = true, canCheck = true)
+        else ShareUiState(if (result.stoppedBeforeAttachment(count)) "Nothing attached this time" else "Check your Mac",
+            result.reviewMessage(), 2, working = false, committed = true, canCheck = true)
     }
     fun checkReceipt() {
         if (mutableState.value.working) return

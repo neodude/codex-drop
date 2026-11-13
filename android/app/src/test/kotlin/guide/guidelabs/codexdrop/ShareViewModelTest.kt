@@ -23,6 +23,7 @@ class ShareViewModelTest {
         var commitGate: CompletableDeferred<Unit>? = null
         var persisted = false
         var terminal = "verified"
+        var blockedResult: String? = null
         var stored: PendingReceipt? = null
         override suspend fun pairing() = Pairing("CodexShot-12345678-1234-1234-1234-123456789abc","a".repeat(64),"b".repeat(43))
         override suspend fun remember(receipt: PendingReceipt) { persisted = true;stored = receipt }
@@ -37,7 +38,7 @@ class ShareViewModelTest {
                 val lookup = request.path.startsWith("v1/jobs/")
                 if (lookup) lookups++
                 val state = if (committing || lookup) terminal else "uploading"
-                val result = if (state == "verified") """{"verifiedCount":1,"totalCount":1,"items":[{"index":0,"status":"verified"}]}""" else "null"
+                val result = if (state == "verified") """{"verifiedCount":1,"totalCount":1,"items":[{"index":0,"status":"verified"}]}""" else blockedResult ?: "null"
                 val job = """{"id":"$id","state":"$state","result":$result}"""
                 HttpReply(if (lookup) 200 else 202, (if (lookup) job else """{"received":true,"job":$job}""").toByteArray())
             }
@@ -65,6 +66,18 @@ class ShareViewModelTest {
         gateway.terminal = "verified"
         val second = ShareViewModel(gateway);second.start(listOf("content://fixture/2"));advanceUntilIdle()
         assertTrue(second.state.value.finished);assertEquals(2,gateway.commits)
+    }
+    @Test fun blockedDraftChangeShowsNoAttachmentFromThisAttempt() = runTest(dispatcher) {
+        val gateway = FakeGateway().apply {
+            terminal = "blocked"
+            blockedResult = """{"reason":"batch_draft_changed","verifiedCount":0,"totalCount":1,"items":[{"index":0,"status":"blocked","reason":"batch_draft_changed","pasteAttempted":false}]}"""
+        }
+        val model = ShareViewModel(gateway)
+        model.start(listOf("content://fixture/video"));advanceUntilIdle()
+        assertEquals("Nothing attached this time",model.state.value.title)
+        assertTrue(model.state.value.detail.contains("change in the Mac’s draft"))
+        assertTrue(model.state.value.canCheck)
+        assertFalse(model.state.value.finished)
     }
     @Test fun cancellingBeforeWorkRunsNeverCommits() = runTest(dispatcher) {
         val gateway = FakeGateway();val model = ShareViewModel(gateway)

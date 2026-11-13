@@ -7,6 +7,12 @@ data class DeliveryItem(val index: Int, val status: String, val pasteAttempted: 
 data class DeliveryJob(val id: String, val state: String, val items: List<DeliveryItem>?, val verifiedCount: Int?, val totalCount: Int?, val reason: String?) {
     fun allVerified(count: Int): Boolean = state == "verified" && totalCount == count && verifiedCount == count &&
         items?.size == count && items.map { it.index }.sorted() == (0 until count).toList() && items.all { it.status == "verified" }
+    fun stoppedBeforeAttachment(count: Int): Boolean {
+        val observed = items ?: return false
+        return state == "blocked" && count in 1..10 && totalCount == count && verifiedCount == 0 &&
+            observed.size == count && observed.map { it.index }.sorted() == (0 until count).toList() &&
+            observed.all { it.pasteAttempted == false && it.status in setOf("blocked", "not_attempted") }
+    }
     fun reviewMessage(): String {
         val detail = if (items == null || totalCount == null || verifiedCount == null) "Attachment is not confirmed. Check Codex on your Mac before sharing again." else buildString {
             append("$verifiedCount of $totalCount files verified attached.")
@@ -23,7 +29,9 @@ data class DeliveryJob(val id: String, val state: String, val items: List<Delive
             "\nAllow Codex Drop in Mac System Settings → Privacy & Security → Accessibility." else ""
         val unlock = if (reason == "mac_screen_locked" || items?.any { it.reason == "mac_screen_locked" } == true)
             "Unlock your Mac to attach files.\n" else ""
-        return "$unlock$detail$permission\nDon’t resend files already attached. No automatic retry."
+        val draftChange = if (reason == "batch_draft_changed" || items?.any { it.reason == "batch_draft_changed" } == true)
+            "Codex Drop detected a change in the Mac’s draft while preparing the attachment. Check that draft before sharing again.\n" else ""
+        return "$unlock$draftChange$detail$permission\nDon’t resend files already attached. No automatic retry."
     }
     companion object {
         internal fun parse(fields: Map<String, Any?>): DeliveryJob {

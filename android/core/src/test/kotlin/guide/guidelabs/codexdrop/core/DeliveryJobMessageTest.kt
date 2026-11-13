@@ -25,4 +25,18 @@ class DeliveryJobMessageTest {
         assertTrue(job.reviewMessage().contains("not confirmed"))
         assertFalse(job.allVerified(1))
     }
+    @Test fun draftChangeBeforePasteExplainsTheStop() {
+        val job = DeliveryJob(TEST_ID,"blocked",listOf(DeliveryItem(0,"blocked",false,"batch_draft_changed")),0,1,"batch_draft_changed")
+        assertTrue(job.stoppedBeforeAttachment(1))
+        assertFalse(job.stoppedBeforeAttachment(2))
+        assertTrue(job.reviewMessage().contains("change in the Mac’s draft"))
+        assertTrue(job.reviewMessage().contains("blocked before attachment"))
+        assertTrue(job.reviewMessage().contains("No automatic retry"))
+    }
+    @Test fun partialOrUnconfirmedSharesCannotClaimNothingWasAttached() {
+        val partial = DeliveryJob(TEST_ID,"uncertain",listOf(DeliveryItem(0,"verified",true,null),DeliveryItem(1,"blocked",false,"batch_draft_changed")),1,2,"batch_stopped")
+        val unknown = DeliveryJob(TEST_ID,"blocked",listOf(DeliveryItem(0,"blocked",null,"batch_draft_changed")),0,1,"batch_draft_changed")
+        assertFalse(partial.stoppedBeforeAttachment(2))
+        assertFalse(unknown.stoppedBeforeAttachment(1))
+    }
 }
