@@ -403,6 +403,7 @@ private final class BatchBoundAdapter: DeliveryAdapter {
     let anchor: ComposerSnapshot
     var lastSnapshot: ComposerSnapshot
     var minimumAttachments: [String: Int]
+    private var observationCount = 0
     init(base: DeliveryAdapter, anchor: ComposerSnapshot) {
         self.base = base; self.anchor = anchor; lastSnapshot = anchor; minimumAttachments = anchor.attachments
     }
@@ -412,8 +413,15 @@ private final class BatchBoundAdapter: DeliveryAdapter {
     var stagedAttachmentName: String? { base.stagedAttachmentName }
     func observe() throws -> ComposerSnapshot {
         let current = try base.observe()
+        observationCount += 1
         guard current.target == anchor.target else { throw DeliveryRefusal(reason: "batch_target_changed") }
-        guard current.draft == anchor.draft else { throw DeliveryRefusal(reason: "batch_draft_changed") }
+        guard current.draft == anchor.draft else {
+            throw DeliveryRefusal(reason: "batch_draft_changed", diagnostics: [
+                "observationCount": String(observationCount),
+                "draftBeforeBytes": String(anchor.draft.count),
+                "draftAfterBytes": String(current.draft.count)
+            ])
+        }
         guard minimumAttachments.allSatisfy({ current.attachments[$0.key, default: 0] >= $0.value }) else {
             throw DeliveryRefusal(reason: "batch_previous_attachment_disappeared")
         }

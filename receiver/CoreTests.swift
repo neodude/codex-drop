@@ -22,7 +22,7 @@ final class BatchFakeAdapter: DeliveryAdapter {
             attached["Remove " + (stagedAttachmentName ?? "image.png"), default: 0] += 1; acknowledged = true
         }
         return ComposerSnapshot(target: scenario == "target_between" && restores > 0 ? "other" : "original",
-            draft: Data((scenario == "draft_between" && restores > 0 ? "edited" : "existing draft").utf8),
+            draft: Data(((scenario == "draft_between" && restores > 0 || scenario == "draft_on_stage" && !stagedTypes.isEmpty) ? "edited" : "existing draft").utf8),
             selectionEmpty: true, attachments: attached)
     }
     func prepare() throws {
@@ -337,6 +337,12 @@ final class FakeAdapter: DeliveryAdapter {
         let stoppedMixedAdapter = BatchFakeAdapter(); stoppedMixedAdapter.scenario = "uncertain_second"
         let stoppedMixed = DeliveryEngine.runBatch(images: mixedFiles, adapter: stoppedMixedAdapter)
         try check(stoppedMixed.status == "uncertain" && stoppedMixed.verifiedCount == 1 && stoppedMixedAdapter.pastes == 2 && stoppedMixedAdapter.stagedTypes == [.png, .mp4], "mixed batch stops on an unacknowledged video without replay or later Paste")
+        let changedDraftAdapter = BatchFakeAdapter(); changedDraftAdapter.scenario = "draft_on_stage"
+        let changedDraft = DeliveryEngine.runBatch(images: [mixedFiles[1]], adapter: changedDraftAdapter)
+        try check(changedDraft.status == "blocked" && changedDraft.verifiedCount == 0 && changedDraftAdapter.pastes == 0,
+                  "draft change before Paste blocks a single video")
+        try check(changedDraft.diagnostics?["observationCount"] != nil && changedDraft.diagnostics?["draftBeforeBytes"] == "14" && changedDraft.diagnostics?["draftAfterBytes"] == "6",
+                  "draft refusal records only structural diagnostics")
         for scenario in ["target_between", "draft_between", "previous_image_lost", "uncertain_second", "clipboard_second", "cancel_second", "screen_locked_between"] {
             let batchAdapter = BatchFakeAdapter(); batchAdapter.scenario = scenario
             let batch = DeliveryEngine.runBatch(images: Array(repeating: fixtureImage, count: 3), adapter: batchAdapter)

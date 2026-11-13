@@ -27,6 +27,13 @@ struct DeliveryJob: Decodable, Sendable {
               result.totalCount == count, let items = result.items, items.count == count else { return false }
         return items.map(\.index).sorted() == Array(0..<count) && items.allSatisfy { $0.status == "verified" }
     }
+    func stoppedBeforeAttachment(count: Int) -> Bool {
+        guard state == "blocked", let result, result.verifiedCount == 0,
+              result.totalCount == count, (1...10).contains(count),
+              let items = result.items, items.count == count,
+              items.map(\.index).sorted() == Array(0..<count) else { return false }
+        return items.allSatisfy { $0.pasteAttempted == false && ($0.status == "blocked" || $0.status == "not_attempted") }
+    }
     var userMessage: String {
         let permissionNeeded = result?.reason == "accessibility_permission_required" || result?.items?.contains { $0.reason == "accessibility_permission_required" } == true
         let unlockNeeded = result?.reason == "mac_screen_locked" || result?.items?.contains { $0.reason == "mac_screen_locked" } == true
@@ -35,6 +42,8 @@ struct DeliveryJob: Decodable, Sendable {
         let reasons = ([result?.reason] + (result?.items?.map(\.reason) ?? [])).compactMap { $0 }
         let causeHelp: String? = reasons.contains("clipboard_snapshot_incomplete")
             ? "The Mac couldn’t safely preserve its current clipboard."
+            : reasons.contains("batch_draft_changed")
+                ? "Codex Drop detected a change in the Mac’s draft while preparing the attachment. Check that draft before sharing again."
             : reasons.contains(where: { $0.hasPrefix("file_dialog_") })
                 ? "The Mac couldn’t complete its file-attachment dialog. Check its open windows."
                 : nil

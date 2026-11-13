@@ -67,7 +67,10 @@ import ImageIO
             if job.allVerified(count: items.count) {
                 context.completeRequest(returningItems: [], completionHandler: nil)
             } else {
-                sheet.render(title: "Check your Mac", status: "Attachment needs review", detail: job.userMessage, stage: nil, working: false, buttonTitle: "Close")
+                let stopped = job.stoppedBeforeAttachment(count: items.count)
+                sheet.render(title: stopped ? "Nothing attached this time" : "Check your Mac",
+                             status: stopped && job.result?.reason == "batch_draft_changed" ? "Mac draft changed" : "Attachment needs review",
+                             detail: job.userMessage, stage: nil, working: false, buttonTitle: "Close")
             }
         } catch is CancellationError { }
         catch {
